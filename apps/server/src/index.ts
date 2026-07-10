@@ -11,6 +11,7 @@ import {
 } from "@personacode/contracts";
 import {
   SessionStore,
+  buildProjectContext,
   compareModels,
   contextWindowFor,
   defaultModelRef,
@@ -165,10 +166,20 @@ app.post("/api/chat", async (c) => {
   const modelRef = body.model ?? session?.model ?? defaultModelRef();
   const mode = body.mode ?? session?.mode ?? "default";
 
+  // Assemble project context (PERSONA.md + recalled memory + skills catalog),
+  // scored against the latest user message, and inject it as extra system text.
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const query = (lastUser?.parts ?? [])
+    .map((p) => ((p as { type: string; text?: string }).type === "text" ? (p as { text?: string }).text ?? "" : ""))
+    .join(" ");
+  const ctx = await buildProjectContext({ cwd: WS_ROOT, query });
+
   const stream = runAgentTurn({
     messages,
     modelRef,
     mode,
+    cwd: WS_ROOT,
+    system: ctx.system || undefined,
     onFallback: (from, to, reason) =>
       console.warn(`[fallback] ${from} → ${to}: ${reason.slice(0, 200)}`),
     onFinishTurn: ({ text, usage, modelRef: usedRef }) => {
