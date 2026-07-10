@@ -1,4 +1,7 @@
 import { useState, useMemo } from "react";
+import type { CookbookResult } from "@personacode/contracts";
+
+type HwState = { loading: boolean; error: string; result: CookbookResult | null };
 
 type Recipe = {
   id: string;
@@ -177,6 +180,27 @@ export default function CookbookPage() {
   const [activeCategory, setActiveCategory] = useState<Category | "all">("all");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [hw, setHw] = useState<HwState>({ loading: false, error: "", result: null });
+  const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
+
+  async function detectHardware() {
+    setHw({ loading: true, error: "", result: null });
+    try {
+      const res = await fetch("/api/cookbook");
+      if (!res.ok) throw new Error(`${res.status}`);
+      const data = await res.json();
+      setHw({ loading: false, error: "", result: data });
+    } catch {
+      setHw({ loading: false, error: "Could not detect hardware. Endpoint may not be available yet.", result: null });
+    }
+  }
+
+  function copyCmd(cmd: string) {
+    navigator.clipboard.writeText(cmd).then(() => {
+      setCopiedCmd(cmd);
+      setTimeout(() => setCopiedCmd(null), 2000);
+    });
+  }
 
   const filtered = useMemo(() => {
     return RECIPES.filter((r) => {
@@ -331,6 +355,79 @@ export default function CookbookPage() {
         <p className="cookbook-ollama-hint">
           For complete privacy and unlimited usage, run models on your own hardware.
         </p>
+
+        {/* Hardware detection */}
+        <div className="hw-detect">
+          <button
+            className={`hw-detect-btn ${hw.loading ? "loading" : ""}`}
+            onClick={detectHardware}
+            disabled={hw.loading}
+          >
+            {hw.loading ? "⚙ Detecting…" : "🔍 Detect my hardware"}
+          </button>
+          {hw.error && <p className="hw-error">{hw.error}</p>}
+        </div>
+
+        {hw.result && (
+          <div className="hw-results">
+            {/* Hardware summary */}
+            <div className="hw-info">
+              <div className="hw-stat">
+                <span className="hw-stat-label">CPU</span>
+                <span className="hw-stat-value">{hw.result.hardware.cpu.brand} ({hw.result.hardware.cpu.cores} cores, {hw.result.hardware.cpu.speedGHz} GHz)</span>
+              </div>
+              <div className="hw-stat">
+                <span className="hw-stat-label">RAM</span>
+                <span className="hw-stat-value">{hw.result.hardware.ram.totalGB.toFixed(1)} GB total, {hw.result.hardware.ram.freeGB.toFixed(1)} GB free</span>
+              </div>
+              {hw.result.hardware.gpu.length > 0 && (
+                <div className="hw-stat">
+                  <span className="hw-stat-label">GPU</span>
+                  <span className="hw-stat-value">
+                    {hw.result.hardware.gpu.map((g) => `${g.model} (${(g.vramMB / 1024).toFixed(1)} GB)`).join(", ")}
+                  </span>
+                </div>
+              )}
+              {hw.result.installedModels.length > 0 && (
+                <div className="hw-stat">
+                  <span className="hw-stat-label">Installed</span>
+                  <span className="hw-stat-value">{hw.result.installedModels.join(", ")}</span>
+                </div>
+              )}
+            </div>
+
+            <p className="hw-summary">{hw.result.summary}</p>
+
+            {/* Personalized recommendations */}
+            <div className="hw-recs">
+              {hw.result.recommendations.map((rec) => (
+                <div key={rec.name} className={`hw-rec hw-tier-${rec.tier}`}>
+                  <div className="hw-rec-head">
+                    <span className="hw-rec-name">{rec.name}</span>
+                    <span className={`hw-rec-tier tier-${rec.tier}`}>{rec.tier}</span>
+                  </div>
+                  <div className="hw-rec-meta">
+                    <span>{rec.parameterSize}</span>
+                    <span>{rec.quantization}</span>
+                    <span>min {rec.minRAM} RAM</span>
+                  </div>
+                  <p className="hw-rec-notes">{rec.notes}</p>
+                  <div className="hw-rec-pull">
+                    <code className="hw-rec-cmd">{rec.pullCommand}</code>
+                    <button
+                      className={`hw-copy-btn ${copiedCmd === rec.pullCommand ? "copied" : ""}`}
+                      onClick={() => copyCmd(rec.pullCommand)}
+                    >
+                      {copiedCmd === rec.pullCommand ? "✓" : "📋"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Static setup steps (always visible) */}
         <div className="cookbook-ollama-steps">
           <div className="cookbook-step">
             <span className="cookbook-step-num">1</span>
