@@ -710,18 +710,10 @@ button { cursor: pointer; }
 
 /* ---------------- live token counter ---------------- */
 .token-counter {
-  max-width: 780px; width: 100%; margin: 0 auto;
-  padding: 0 20px;
+  margin-top: 4px;
   animation: tokenSlideIn 0.3s ease;
 }
 @keyframes tokenSlideIn { from { opacity: 0; transform: translateY(-6px); } }
-.token-counter.final {
-  animation: tokenFadeOut 4s ease forwards;
-}
-@keyframes tokenFadeOut {
-  0%, 70% { opacity: 1; }
-  100% { opacity: 0; }
-}
 .token-counter-inner {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 5px 14px; border-radius: 9px;

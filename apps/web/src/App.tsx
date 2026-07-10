@@ -164,45 +164,65 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // Auto-scroll: use requestAnimationFrame during streaming for smooth continuous scroll
+  const rafRef = useRef<number>(0);
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, status]);
+    if (status === "streaming") {
+      const tick = () => {
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+        rafRef.current = requestAnimationFrame(tick);
+      };
+      rafRef.current = requestAnimationFrame(tick);
+      return () => cancelAnimationFrame(rafRef.current);
+    } else {
+      // One final scroll when streaming ends
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    }
+  }, [status]);
+
+  // Also scroll when messages array changes (new user message, session switch)
+  useEffect(() => {
+    if (status !== "streaming") {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    }
+  }, [messages.length, status]);
 
   // Refresh sessions list after streaming completes (fixes "New session" title bug).
   useEffect(() => {
     if (prevStatus.current === "streaming" && status !== "streaming") {
       fetch("/api/sessions").then((r) => r.json()).then(setSessions).catch(() => {});
-      // Fetch real token usage after streaming ends
+      // Fetch real token usage after streaming ends — keep visible (no auto-fade)
       if (sessionId) {
         fetch(`/api/sessions/${sessionId}/usage`)
           .then((r) => r.json())
           .then((u) => {
             if (u.total) setLiveTokens({ input: u.total.inputTokens, output: u.total.outputTokens, total: u.total.totalTokens });
-            // Keep the final count visible for 4 seconds, then fade out
-            setTimeout(() => setLiveTokens(null), 4000);
           })
-          .catch(() => { setTimeout(() => setLiveTokens(null), 2000); });
+          .catch(() => {});
       }
     }
     prevStatus.current = status;
   }, [status, sessionId]);
 
   // Live token estimation during streaming
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   useEffect(() => {
     if (status === "streaming") {
       streamStartRef.current = Date.now();
       setStreamElapsed(0);
+      setLiveTokens(null); // Reset for new stream
       const interval = setInterval(() => {
         setStreamElapsed(Math.floor((Date.now() - streamStartRef.current) / 1000));
-        // Estimate tokens from the last assistant message text (~4 chars per token)
-        const lastMsg = messages[messages.length - 1];
+        // Use ref to avoid stale closure
+        const msgs = messagesRef.current;
+        const lastMsg = msgs[msgs.length - 1];
         if (lastMsg?.role === "assistant") {
           const textLen = lastMsg.parts
             .filter((p) => p.type === "text")
             .reduce((acc, p) => acc + ((p as { text: string }).text?.length ?? 0), 0);
           const estimatedOutput = Math.max(1, Math.round(textLen / 4));
-          // Input tokens: estimate from all user messages in this conversation
-          const userTextLen = messages
+          const userTextLen = msgs
             .filter((m) => m.role === "user")
             .reduce((acc, m) => acc + m.parts.filter((p) => p.type === "text").reduce((a2, p) => a2 + ((p as { text: string }).text?.length ?? 0), 0), 0);
           const estimatedInput = Math.max(1, Math.round(userTextLen / 4));
@@ -215,7 +235,7 @@ export default function App() {
       }, 200);
       return () => clearInterval(interval);
     }
-  }, [status, messages]);
+  }, [status]);
 
   async function newSession() {
     const res = await fetch("/api/sessions", {
@@ -247,6 +267,7 @@ export default function App() {
     if (!input.trim() || status === "streaming") return;
     const text = input;
     setInput("");
+    setLiveTokens(null); // Clear previous token count
     void (sessionId ? Promise.resolve() : newSession()).then(() => sendMessage({ text }));
   }
 
@@ -352,14 +373,21 @@ export default function App() {
                   </div>
                   <div className="bubble">
                     {m.parts.map((part, i) => {
-                      if (part.type === "text")
+                      if (part.type === "text") {
+                        const isLastAssistant =
+                          m.role === "assistant" && messages.indexOf(m) === messages.length - 1;
                         return m.role === "assistant" ? (
-                          <MarkdownRenderer key={i} text={(part as { text: string }).text} />
+                          <MarkdownRenderer
+                            key={i}
+                            text={(part as { text: string }).text}
+                            isStreaming={isLastAssistant && status === "streaming"}
+                          />
                         ) : (
                           <div key={i} className="text">
                             {(part as { text: string }).text}
                           </div>
                         );
+                      }
                       if (part.type === "data-fallback") {
                         const d = (part as { data?: { from?: string; to?: string } }).data;
                         return (
@@ -415,6 +443,35 @@ export default function App() {
                       return null;
                     })}
                   </div>
+                  {/* Token counter below the last assistant message */}
+                  {m.role === "assistant" && messages.indexOf(m) === messages.length - 1 && liveTokens && (
+                    <div className={`token-counter ${status === "streaming" ? "streaming" : "final"}`}>
+                      <div className="token-counter-inner">
+                        <span className="token-counter-icon">{status === "streaming" ? "⟳" : "◈"}</span>
+                        <span className="token-counter-item">
+                          <span className="token-label">In</span>
+                          <span className="token-value">{liveTokens.input.toLocaleString()}</span>
+                        </span>
+                        <span className="token-sep">·</span>
+                        <span className="token-counter-item">
+                          <span className="token-label">Out</span>
+                          <span className="token-value out">{liveTokens.output.toLocaleString()}</span>
+                        </span>
+                        <span className="token-sep">·</span>
+                        <span className="token-counter-item">
+                          <span className="token-label">Total</span>
+                          <span className="token-value total">{liveTokens.total.toLocaleString()}</span>
+                        </span>
+                        {status === "streaming" && (
+                          <>
+                            <span className="token-sep">·</span>
+                            <span className="token-elapsed">{streamElapsed}s</span>
+                          </>
+                        )}
+                        {status !== "streaming" && <span className="token-final-badge">✓ final</span>}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))
             )}
@@ -432,35 +489,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Live token counter */}
-        {liveTokens && (
-          <div className={`token-counter ${status === "streaming" ? "streaming" : "final"}`}>
-            <div className="token-counter-inner">
-              <span className="token-counter-icon">{status === "streaming" ? "⟳" : "◈"}</span>
-              <span className="token-counter-item">
-                <span className="token-label">In</span>
-                <span className="token-value">{liveTokens.input.toLocaleString()}</span>
-              </span>
-              <span className="token-sep">·</span>
-              <span className="token-counter-item">
-                <span className="token-label">Out</span>
-                <span className="token-value out">{liveTokens.output.toLocaleString()}</span>
-              </span>
-              <span className="token-sep">·</span>
-              <span className="token-counter-item">
-                <span className="token-label">Total</span>
-                <span className="token-value total">{liveTokens.total.toLocaleString()}</span>
-              </span>
-              {status === "streaming" && (
-                <>
-                  <span className="token-sep">·</span>
-                  <span className="token-elapsed">{streamElapsed}s</span>
-                </>
-              )}
-              {status !== "streaming" && <span className="token-final-badge">✓ final</span>}
-            </div>
-          </div>
-        )}
 
         {modeTone && (
           <div className={`mode-banner ${modeTone}`}>
