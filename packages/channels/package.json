@@ -17,6 +17,16 @@
   },
   "dependencies": {
     "@personacode/contracts": "workspace:*",
-    "dotenv": "^17.4.2"
+    "@slack/bolt": "^4.7.3",
+    "discord.js": "^14.26.5",
+    "dotenv": "^17.4.2",
+    "grammy": "^1.44.0",
+    "imapflow": "^1.4.6",
+    "mailparser": "^3.9.14",
+    "nodemailer": "^9.0.3",
+    "systeminformation": "^5.31.15"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^8.0.1"
   }
 }

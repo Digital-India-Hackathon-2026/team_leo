@@ -6,10 +6,11 @@
       "badge": "free",
       "keyUrl": "https://aistudio.google.com/apikey",
       "envVar": "GOOGLE_GENERATIVE_AI_API_KEY",
-      "defaultModel": "gemini-2.5-flash",
-      "models": ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"],
-      "quotaNote": "Free: ~10-60 RPM depending on model, 1M-token context, no card. Best default brain.",
-      "contextWindows": { "gemini-2.5-flash": 1048576, "gemini-2.5-flash-lite": 1048576, "gemini-2.5-pro": 1048576 }
+      "defaultModel": "gemini-3-flash-preview",
+      "models": ["gemini-3-flash-preview", "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"],
+      "fast": "gemini-flash-lite-latest",
+      "quotaNote": "Free: ~10-60 RPM depending on model, 1M-token context, no card. Best default brain. (2.5-flash was retired for new keys; use the -latest aliases / 3.x.)",
+      "contextWindows": { "gemini-3-flash-preview": 1048576, "gemini-flash-latest": 1048576, "gemini-flash-lite-latest": 1048576, "gemini-3.1-flash-lite": 1048576 }
     },
     {
       "id": "groq",
@@ -19,6 +20,7 @@
       "envVar": "GROQ_API_KEY",
       "defaultModel": "llama-3.3-70b-versatile",
       "models": ["llama-3.3-70b-versatile", "qwen/qwen3-32b", "llama-3.1-8b-instant"],
+      "fast": "llama-3.1-8b-instant",
       "quotaNote": "Free: ~30 RPM / daily token caps, no card. Fastest inference — used for quick calls & Auto-mode routing.",
       "contextWindows": { "llama-3.3-70b-versatile": 131072, "qwen/qwen3-32b": 131072, "llama-3.1-8b-instant": 131072 }
     },
@@ -29,10 +31,10 @@
       "keyUrl": "https://cloud.cerebras.ai/",
       "envVar": "CEREBRAS_API_KEY",
       "baseUrl": "https://api.cerebras.ai/v1",
-      "defaultModel": "llama-3.3-70b",
-      "models": ["llama-3.3-70b", "qwen-3-32b"],
-      "quotaNote": "Free: ~1M tokens/day, no card. Big free budget — used for Deep Research and bulk work.",
-      "contextWindows": { "llama-3.3-70b": 65536, "qwen-3-32b": 65536 }
+      "defaultModel": "gpt-oss-120b",
+      "models": ["gpt-oss-120b", "zai-glm-4.7"],
+      "quotaNote": "Free: ~1M tokens/day, no card. Big free budget — used for Deep Research and bulk work. (Llama models retired; now serves gpt-oss + GLM.)",
+      "contextWindows": { "gpt-oss-120b": 131072, "zai-glm-4.7": 131072 }
     },
     {
       "id": "openrouter",
@@ -41,15 +43,16 @@
       "keyUrl": "https://openrouter.ai/keys",
       "baseUrl": "https://openrouter.ai/api/v1",
       "envVar": "OPENROUTER_API_KEY",
-      "defaultModel": "meta-llama/llama-3.3-70b-instruct:free",
+      "defaultModel": "openai/gpt-oss-120b:free",
       "models": [
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "deepseek/deepseek-r1:free",
+        "openai/gpt-oss-120b:free",
         "qwen/qwen3-coder:free",
-        "google/gemma-3-27b-it:free"
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "openai/gpt-oss-20b:free"
       ],
-      "quotaNote": "Free: 20 RPM, 50 req/day (1000/day if you ever bought $10 credits). 27+ rotating :free models.",
-      "contextWindows": { "meta-llama/llama-3.3-70b-instruct:free": 131072, "deepseek/deepseek-r1:free": 163840, "qwen/qwen3-coder:free": 262144, "google/gemma-3-27b-it:free": 96000 }
+      "fast": "openai/gpt-oss-20b:free",
+      "quotaNote": "Free: 20 RPM, 50 req/day (1000/day if you ever bought $10 credits). Rotating :free models — enable the data/privacy setting in your OpenRouter account or :free calls 402.",
+      "contextWindows": { "openai/gpt-oss-120b:free": 131072, "qwen/qwen3-coder:free": 262144, "meta-llama/llama-3.3-70b-instruct:free": 131072, "openai/gpt-oss-20b:free": 131072 }
     },
     {
       "id": "nvidia",
@@ -72,6 +75,7 @@
       "envVar": "GITHUB_MODELS_TOKEN",
       "defaultModel": "openai/gpt-4o-mini",
       "models": ["openai/gpt-4o-mini", "meta/llama-3.3-70b-instruct"],
+      "fast": "openai/gpt-4o-mini",
       "quotaNote": "Free with any GitHub account (rate-limited per day). Fine-grained PAT works.",
       "contextWindows": { "openai/gpt-4o-mini": 128000, "meta/llama-3.3-70b-instruct": 131072 }
     },
@@ -82,10 +86,22 @@
       "keyUrl": "https://opencode.ai/zen",
       "baseUrl": "https://opencode.ai/zen/v1",
       "envVar": "OPENCODE_ZEN_API_KEY",
-      "defaultModel": "grok-code",
-      "models": ["grok-code"],
-      "quotaNote": "Rotating launch-window $0 models (roster changes weekly; prompts may train models while free).",
-      "contextWindows": { "grok-code": 262144 }
+      "defaultModel": "deepseek-v4-flash-free",
+      "models": [
+        "deepseek-v4-flash-free",
+        "mimo-v2.5-free",
+        "north-mini-code-free",
+        "claude-sonnet-5",
+        "claude-haiku-4-5",
+        "gpt-5.5",
+        "gemini-3-flash",
+        "grok-4.5",
+        "kimi-k2.6",
+        "deepseek-v4-pro"
+      ],
+      "fast": "deepseek-v4-flash-free",
+      "quotaNote": "One key → many models, free AND paid (like using OpenCode). The `*-free` models cost $0; the frontier models (Claude/GPT/Gemini/Grok/Kimi/DeepSeek) are pay-as-you-go. Default + fallback use a free model; pick a paid one per-session if you have billing enabled.",
+      "contextWindows": { "deepseek-v4-flash-free": 131072, "mimo-v2.5-free": 131072, "north-mini-code-free": 131072, "claude-sonnet-5": 200000, "claude-haiku-4-5": 200000, "gpt-5.5": 400000, "gemini-3-flash": 1048576, "grok-4.5": 256000, "kimi-k2.6": 262144, "deepseek-v4-pro": 131072 }
     },
     {
       "id": "ollama",

@@ -5,9 +5,11 @@ import {
   stepCountIs,
   streamText,
 } from "ai";
-import type { ModelMessage, UIMessage, UIMessageChunk } from "ai";
+import type { ModelMessage, ToolSet, UIMessage, UIMessageChunk } from "ai";
 import type { Mode, TokenUsage } from "@personacode/contracts";
 import { buildTools } from "../tools/index.js";
+import { compactConversation, shouldCompact } from "./compaction.js";
+import { runScout } from "./scout.js";
 import { defaultModelRef, fallbackChain, getModel, setCooldown } from "../providers/registry.js";
 import type { ProviderId } from "@personacode/contracts";
 
@@ -34,13 +36,36 @@ export interface AgentRunOptions {
   mode?: Mode;
   cwd?: string;
   disabledTools?: string[];
+  /** Extra tools (e.g. from MCP servers) merged with the builtins for this turn. */
+  extraTools?: ToolSet;
+  /** Auto-compact the history when it nears the model's context window (default true). */
+  autoCompact?: boolean;
+  /** Model Crew: run the scout→brief pipeline before the brain turn (opt-in). */
+  orchestrate?: boolean;
+  /**
+   * Permission approval channel for side-effecting tools in Default mode. The host
+   * resolves each request id with a decision; core emits a `data-permission-request`
+   * chunk and awaits it. "always" auto-approves that tool for the rest of the turn.
+   */
+  approval?: {
+    waitForDecision: (id: string, meta: { tool: string; input: unknown }) => Promise<"allow" | "deny" | "always">;
+  };
   system?: string;
   /** fires once, after the successful attempt fully streams */
   onFinishTurn?: (r: AgentTurnResult) => void | Promise<void>;
   onFallback?: (from: string, to: string, reason: string) => void;
 }
 
-function isQuotaError(msg: string): boolean {
+/**
+ * Should this provider error trigger a fallback to the next provider?
+ * Covers three families of "this provider can't serve the request" failures:
+ *  - rate/quota limits (429, quota, overloaded, insufficient)
+ *  - transient upstream outages (503, 500, overloaded)
+ *  - auth / key problems (401/403, invalid or killed API key, permission denied)
+ * A killed/invalid key surfaces as "API key not valid" (400) or 403 — the plan's
+ * "kill the key to demo fallback" only works if those hand off instead of hard-failing.
+ */
+function shouldFallback(msg: string): boolean {
   const m = msg.toLowerCase();
   return (
     m.includes("429") ||
@@ -48,14 +73,29 @@ function isQuotaError(msg: string): boolean {
     m.includes("quota") ||
     m.includes("overloaded") ||
     m.includes("503") ||
-    m.includes("unauthorized") ||
+    m.includes("500") ||
+    m.includes("insufficient") ||
     m.includes("401") ||
-    m.includes("insufficient")
+    m.includes("403") ||
+    m.includes("unauthorized") ||
+    m.includes("forbidden") ||
+    m.includes("permission denied") ||
+    m.includes("api key not valid") ||
+    m.includes("invalid api key") ||
+    m.includes("api_key_invalid")
   );
 }
 
 function providerOf(ref: string): ProviderId {
   return ref.slice(0, ref.indexOf("/")) as ProviderId;
+}
+
+/** Text of the most recent user message (for scout task + memory recall). */
+function lastUserText(messages: UIMessage[]): string {
+  const last = [...messages].reverse().find((m) => m.role === "user");
+  return (last?.parts ?? [])
+    .map((p) => ((p as { type: string; text?: string }).type === "text" ? (p as { text?: string }).text ?? "" : ""))
+    .join(" ");
 }
 
 /**
@@ -74,29 +114,90 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
 
   return createUIMessageStream({
     execute: async ({ writer }) => {
-      const modelMessages = await convertToModelMessages(opts.messages);
+      let modelMessages = await convertToModelMessages(opts.messages);
+
+      // Build the tool-approval gate: emit a request chunk, await the host's decision.
+      // "always" auto-approves that tool for the remainder of this turn.
+      const alwaysAllow = new Set<string>();
+      const requestApproval = opts.approval
+        ? async ({ tool, input }: { tool: string; input: unknown }): Promise<boolean> => {
+            if (alwaysAllow.has(tool)) return true;
+            const id = crypto.randomUUID();
+            writer.write({ type: "data-permission-request", data: { id, tool, input } } as unknown as UIMessageChunk);
+            const decision = await opts.approval!.waitForDecision(id, { tool, input });
+            if (decision === "always") {
+              alwaysAllow.add(tool);
+              return true;
+            }
+            return decision === "allow";
+          }
+        : undefined;
+
+      // Model Crew orchestration (opt-in): a fast scout picks relevant files and fast
+      // summarizers brief them in parallel; the brief is injected so the brain starts
+      // with context already known. Strictly additive — any failure just skips it.
+      let orchestrationBrief = "";
+      if (opts.orchestrate) {
+        try {
+          const task = lastUserText(opts.messages);
+          const scout = await runScout({ cwd, task });
+          if (scout) {
+            for (const st of scout.stages) {
+              writer.write({ type: "data-orchestration", data: st } as unknown as UIMessageChunk);
+            }
+            if (scout.brief) {
+              orchestrationBrief = `\n\nCONTEXT BRIEF (gathered by Model Crew scout — files already read, don't re-read them):\n${scout.brief}`;
+            }
+          }
+        } catch {
+          /* orchestration is additive; fall through to the normal turn */
+        }
+      }
+
+      // Auto-compaction: if the history nears the context window, summarize the older
+      // turns and carry the brief in the system prompt (fail-soft — keep full history
+      // if summarization fails). Emitted as a data-compaction chunk for the UI.
+      let compactionBrief = "";
+      if (opts.autoCompact !== false && shouldCompact(modelMessages, primary)) {
+        const r = await compactConversation({ messages: modelMessages, modelRef: primary });
+        if (r.compacted) {
+          modelMessages = r.messages;
+          compactionBrief = r.summary;
+          writer.write({
+            type: "data-compaction",
+            data: { keptRecent: modelMessages.length, note: "history auto-compacted" },
+          } as unknown as UIMessageChunk);
+        }
+      }
+
       const chain = [primary, ...fallbackChain(primary)];
       let lastError = "";
 
       for (let i = 0; i < chain.length; i++) {
         const ref = chain[i];
-        const messages: ModelMessage[] =
+        // The handoff brief must go in the `system` instructions, NOT as a system
+        // message inside `messages` — AI SDK v7 rejects system-role messages there
+        // (InvalidPromptError), which would make every fallback attempt fail.
+        const handoffNote =
           i === 0
-            ? modelMessages
-            : [
-                {
-                  role: "system",
-                  content: `HANDOFF: model ${chain[i - 1]} hit a provider limit mid-conversation. Continue seamlessly from the conversation state. Do NOT restart, re-plan, or repeat completed work.`,
-                },
-                ...modelMessages,
-              ];
+            ? ""
+            : `\n\nHANDOFF: model ${chain[i - 1]} hit a provider limit mid-conversation. Continue seamlessly from the conversation state. Do NOT restart, re-plan, or repeat completed work.`;
 
         let finished: AgentTurnResult | undefined;
         const result = streamText({
           model: getModel(ref),
-          system: SYSTEM_PROMPT + MODE_HINTS[mode] + (opts.system ? `\n${opts.system}` : ""),
-          messages,
-          tools: buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []) }),
+          system:
+            SYSTEM_PROMPT +
+            MODE_HINTS[mode] +
+            (opts.system ? `\n${opts.system}` : "") +
+            (compactionBrief ? `\n\n${compactionBrief}` : "") +
+            orchestrationBrief +
+            handoffNote,
+          messages: modelMessages,
+          tools: {
+            ...buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []), requestApproval }),
+            ...(opts.extraTools ?? {}),
+          },
           stopWhen: stepCountIs(16),
           onFinish: ({ text, totalUsage }) => {
             finished = {
@@ -113,7 +214,13 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
 
         let errorText: string | undefined;
         try {
-          for await (const chunk of result.toUIMessageStream({ sendStart: i === 0 })) {
+          // onError surfaces the REAL provider message in the error chunk; without it
+          // the SDK masks every failure as "An error occurred", so shouldFallback()
+          // could never see "429"/"api key not valid" and fallback never fired.
+          for await (const chunk of result.toUIMessageStream({
+            sendStart: i === 0,
+            onError: (err) => (err instanceof Error ? err.message : String(err)),
+          })) {
             if (chunk.type === "error") {
               errorText = chunk.errorText;
               break;
@@ -131,7 +238,7 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
 
         lastError = errorText;
         const next = chain[i + 1];
-        if (isQuotaError(errorText) && next) {
+        if (shouldFallback(errorText) && next) {
           setCooldown(providerOf(ref), 5 * 60_000);
           opts.onFallback?.(ref, next, errorText);
           writer.write({
@@ -170,7 +277,7 @@ export async function generateWithFallback(prompt: string, modelRef?: string) {
     } catch (err) {
       lastError = err;
       const msg = String((err as Error)?.message ?? err);
-      if (!isQuotaError(msg)) throw err;
+      if (!shouldFallback(msg)) throw err;
       setCooldown(providerOf(ref), 5 * 60_000);
     }
   }

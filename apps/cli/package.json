@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
+    "pcode": "./dist/index.js",
     "personacode": "./dist/index.js"
   },
   "scripts": {
