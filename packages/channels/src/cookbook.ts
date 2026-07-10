@@ -168,25 +168,16 @@ export async function detectHardware(): Promise<HardwareInfo> {
 /** Filter the model catalog based on detected hardware. */
 function filterModels(hw: HardwareInfo): ModelRecommendation[] {
   const totalRAM = hw.ram.totalGB;
-  const maxVRAM = Math.max(0, ...hw.gpu.map((g) => g.vramMB));
+  const maxVRAMGB = Math.max(0, ...hw.gpu.map((g) => g.vramMB)) / 1024;
 
-  // Effective memory: use VRAM if available (GPU offloading), else RAM
-  const effectiveGB = maxVRAM > 0 ? Math.max(totalRAM, maxVRAM / 1024) : totalRAM;
+  // Effective memory: GPU VRAM is used for inference if a discrete GPU is present
+  const effectiveGB = maxVRAMGB > 2 ? Math.max(totalRAM, maxVRAMGB) : totalRAM;
 
-  const allowedTiers = new Set<ModelRecommendation["tier"]>();
-
-  if (effectiveGB >= 48) {
-    allowedTiers.add("large");
-  }
-  if (effectiveGB >= 8) {
-    allowedTiers.add("medium");
-  }
-  if (effectiveGB >= 4) {
-    allowedTiers.add("small");
-  }
-  allowedTiers.add("tiny"); // always include tiny
-
-  return MODEL_CATALOG.filter((m) => allowedTiers.has(m.tier));
+  // Filter each model by its minRAM string (parsed to a number), with a 10% headroom buffer
+  return MODEL_CATALOG.filter((m) => {
+    const minGB = parseFloat(m.minRAM); // e.g. "16 GB" → 16
+    return effectiveGB >= minGB * 0.9;  // 10% headroom so "16 GB system" gets 16 GB models
+  });
 }
 
 /** Try fetching locally installed models from Ollama. */
