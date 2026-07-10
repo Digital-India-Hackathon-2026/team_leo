@@ -708,6 +708,53 @@ button { cursor: pointer; }
 /* streaming model indicator */
 .streaming-model { font-size: 11px; color: var(--accent); font-style: italic; }
 
+/* ---------------- live token counter ---------------- */
+.token-counter {
+  margin-top: 4px;
+  animation: tokenSlideIn 0.3s ease;
+}
+@keyframes tokenSlideIn { from { opacity: 0; transform: translateY(-6px); } }
+.token-counter-inner {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 14px; border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  font-size: 12px;
+}
+.token-counter.streaming .token-counter-inner {
+  border-color: color-mix(in srgb, var(--accent2) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent2) 6%, var(--panel));
+}
+.token-counter-icon {
+  font-size: 13px; color: var(--accent2);
+}
+.token-counter.streaming .token-counter-icon {
+  animation: spin 1.5s linear infinite;
+}
+.token-counter-item { display: inline-flex; align-items: center; gap: 4px; }
+.token-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--faint); font-weight: 600;
+}
+.token-value {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px; color: var(--dim); font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.token-value.out { color: var(--accent2); }
+.token-value.total { color: var(--text); font-weight: 600; }
+.token-sep { color: var(--faint); font-size: 10px; }
+.token-elapsed {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px; color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.token-final-badge {
+  font-size: 10.5px; color: var(--accent2); font-weight: 600;
+  padding: 1px 6px; border-radius: 5px;
+  background: color-mix(in srgb, var(--accent2) 12%, transparent);
+}
+
 /* ---------------- gallery page ---------------- */
 .gallery-page { padding: 28px 24px; max-width: 960px; margin: 0 auto; overflow-y: auto; height: 100vh; }
 .gallery-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; gap: 16px; }
