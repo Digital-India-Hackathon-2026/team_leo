@@ -3,6 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { getModel, isMockMode } from "../providers/registry.js";
 import { modelForRole, nextParallelRef } from "../providers/roles.js";
+import { resolveWorkspacePath } from "../security/paths.js";
 
 /**
  * Model Crew — Context Scout pipeline. A fast "scout" model picks the ≤12 files most
@@ -106,7 +107,7 @@ export async function briefFiles(paths: string[], cwd: string): Promise<{ brief:
     paths.map(async (p) => {
       let content: string;
       try {
-        content = await readFile(join(cwd, p), "utf8");
+        content = await readFile(await resolveWorkspacePath(cwd, p), "utf8");
       } catch {
         return `## ${p}\n(could not read)`;
       }

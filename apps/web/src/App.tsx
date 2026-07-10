@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import type { ModelInfo, Mode, SessionMeta } from "@personacode/contracts";
+import type { ModelInfo, Mode, SessionMeta, PavStage } from "@personacode/contracts";
 import { MODE_LABELS } from "@personacode/contracts";
 import MarkdownRenderer from "./components/MarkdownRenderer";
 import ToolCallCard from "./components/ToolCallCard";
+import PavCard from "./components/PavCard";
 import UsagePanel from "./components/UsagePanel";
 import ThemePicker from "./components/ThemePicker";
 import ComparePage from "./pages/ComparePage";
@@ -92,6 +93,9 @@ export default function App() {
   const [wsTab, setWsTab] = useState<WsTab>("files");
   const [preview, setPreview] = useState<{ path: string; content: string } | null>(null);
   const [crew, setCrew] = useState(false);
+  const [pav, setPav] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   // Answered tool-permission requests: id → the decision taken (hides the buttons).
   const [answered, setAnswered] = useState<Record<string, string>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -140,9 +144,9 @@ export default function App() {
     () =>
       new DefaultChatTransport({
         api: "/api/chat",
-        body: () => ({ sessionId, model, mode, orchestrate: crew, approvals: true }),
+        body: () => ({ sessionId, model, mode, orchestrate: crew, pav, approvals: true }),
       }),
-    [sessionId, model, mode, crew]
+    [sessionId, model, mode, crew, pav]
   );
   const { messages, sendMessage, status, setMessages } = useChat({ transport });
 
@@ -275,8 +279,13 @@ export default function App() {
 
   return (
     <div className={`app ${wsOpen ? "" : "ws-closed"}`}>
+      {/* mobile hamburger */}
+      <button className="hamburger" aria-label="Toggle sidebar" onClick={() => setSidebarOpen((v) => !v)}>
+        {sidebarOpen ? "✕" : "☰"}
+      </button>
+      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       {/* ---------------- sessions rail ---------------- */}
-      <aside className="rail">
+      <aside className={`rail ${sidebarOpen ? "open" : ""}`}>
         <div className="brand">
           <span className="mark">◆</span> Personacode
         </div>
@@ -301,6 +310,7 @@ export default function App() {
               <button
                 className="s-delete"
                 title="Delete session"
+                aria-label="Delete session"
                 onClick={(e) => deleteSession(e, s.id)}
               >
                 ✕
@@ -345,6 +355,23 @@ export default function App() {
           <button className="ws-toggle" onClick={() => setWsOpen((o) => !o)}>
             {wsOpen ? "Hide workspace" : "Workspace"}
           </button>
+          <button
+            className={`share-btn ${shareUrl ? "copied" : ""}`}
+            disabled={!sessionId}
+            onClick={async () => {
+              if (!sessionId) return;
+              try {
+                const res = await fetch(`/api/share/${sessionId}`, { method: "POST" });
+                const { url } = await res.json();
+                const fullUrl = `${location.origin}${url}`;
+                await navigator.clipboard.writeText(fullUrl);
+                setShareUrl(fullUrl);
+                setTimeout(() => setShareUrl(null), 3000);
+              } catch { /* ignore */ }
+            }}
+          >
+            {shareUrl ? "✓ Copied link" : "⛓ Share"}
+          </button>
         </header>
 
         <div className="stream" ref={scrollRef}>
@@ -366,6 +393,7 @@ export default function App() {
                     <button
                       className={`copy-btn ${copiedId === m.id ? "copied" : ""}`}
                       title="Copy message"
+                      aria-label="Copy message"
                       onClick={() => copyMessage(m.id, m.parts as Array<{ type: string; text?: string }>)}
                     >
                       {copiedId === m.id ? "✓" : "📋"}
@@ -403,6 +431,29 @@ export default function App() {
                             ⚡ {d?.stage} · {shortModel(d?.model)}
                           </div>
                         );
+                      }
+                      if (part.type === "data-compaction") {
+                        return (
+                          <div key={i} className="chip compaction">
+                            ✂ History auto-compacted to fit context window
+                          </div>
+                        );
+                      }
+                      if (part.type === "data-pav") {
+                        // Collect all pav stages from consecutive data-pav parts
+                        const pavStages: PavStage[] = [];
+                        for (let j = i; j < m.parts.length; j++) {
+                          const p = m.parts[j];
+                          if (p.type === "data-pav") {
+                            pavStages.push((p as { data?: PavStage }).data as PavStage);
+                          } else if (p.type !== "text") break;
+                          else break;
+                        }
+                        // Only render PavCard on the first data-pav part
+                        if (i === 0 || m.parts[i - 1]?.type !== "data-pav") {
+                          return <PavCard key={i} stages={pavStages} />;
+                        }
+                        return null;
                       }
                       if (part.type === "data-permission-request") {
                         const d = (part as { data?: { id?: string; tool?: string; input?: unknown } }).data;
@@ -482,7 +533,7 @@ export default function App() {
                   {model && <span className="streaming-model">using {shortModel(model)}</span>}
                 </div>
                 <div className="bubble">
-                  <span className="cursor" />
+                  <span className="cursor" role="status" aria-label="Generating response" />
                 </div>
               </div>
             )}
@@ -551,6 +602,13 @@ export default function App() {
               onClick={() => setCrew((v) => !v)}
             >
               ⚡ Crew
+            </button>
+            <button
+              className={`ctl toggle${pav ? " on" : ""}`}
+              title="PAV Loop — Plan → Apply → Verify: iterative coding with verification"
+              onClick={() => setPav((v) => !v)}
+            >
+              ⚙ PAV
             </button>
             <div className="spacer" />
             <button className="send" onClick={send} disabled={status === "streaming" || !input.trim()}>
