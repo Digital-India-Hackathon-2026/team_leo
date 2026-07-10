@@ -5,3 +5,5 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - vite@8.1.4
+  - discord.js@14.26.5
+  - pnpm@11.11.0

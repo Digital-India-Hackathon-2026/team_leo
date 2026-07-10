@@ -6,8 +6,29 @@
  * message back with a fake-LLM reply, so adapters are testable end-to-end
  * WITHOUT any provider keys or the main server running.
  */
-import "dotenv/config";
-import { allAdapters } from "./index.js";
+import { config as dotenvConfig } from "dotenv";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+// Load .env from the nearest ancestor that has one — pnpm sets cwd to
+// packages/channels/, so the default dotenv lookup would miss the root .env.
+(function loadEnv() {
+  let dir = process.cwd();
+  for (let i = 0; i < 6; i++) {
+    const candidate = join(dir, ".env");
+    if (existsSync(candidate)) {
+      dotenvConfig({ path: candidate });
+      return;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  dotenvConfig(); // fall back to default behavior
+})();
+
+// Dynamic import so adapter modules see the loaded env vars.
+const { allAdapters } = await import("./index.js");
 
 const fakeLlm = (text: string) =>
   `🤖 (personacode test harness) I received: "${text.slice(0, 200)}" — the real agent takes over once the server integration lands.`;
@@ -33,3 +54,4 @@ process.on("SIGINT", async () => {
   await Promise.all(active.map((a) => a.stop()));
   process.exit(0);
 });
+
