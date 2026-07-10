@@ -14,7 +14,9 @@
     "@personacode/contracts": "workspace:*",
     "ai": "^7.0.18",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "react-markdown": "^9.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
