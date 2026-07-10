@@ -206,6 +206,13 @@ button { cursor: pointer; }
 }
 .ctl.icon { padding: 5px 8px; }
 .ctl.icon:disabled { opacity: 0.5; cursor: default; }
+.ctl.toggle { cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; }
+.ctl.toggle:hover { border-color: var(--line2); }
+.ctl.toggle.on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 .ctl .ctl-ico { color: var(--faint); font-size: 12px; }
 .ctl.select { padding-right: 4px; }
 .ctl.select select {

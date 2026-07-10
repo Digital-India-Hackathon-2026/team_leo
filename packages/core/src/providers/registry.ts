@@ -10,6 +10,8 @@ import { createMockModel } from "./mock.js";
 
 type CatalogEntry = Omit<ProviderInfo, "configured" | "coolingDownUntil"> & {
   contextWindows?: Record<string, number>;
+  /** Model Crew: a fast/cheap model on this provider for scout/summarizer/router roles. */
+  fast?: string;
 };
 
 const catalogPath = join(dirname(fileURLToPath(import.meta.url)), "providers.json");
@@ -119,6 +121,22 @@ export function fallbackChain(excludeRef?: string): string[] {
     if (getCooldown(p.id)) continue;
     const ref = `${p.id}/${p.defaultModel}`;
     if (ref !== excludeRef) chain.push(ref);
+  }
+  return chain;
+}
+
+/**
+ * Model Crew: fast/cheap model refs across configured, non-cooling providers in
+ * priority order — each provider's `fast` hint (or its default). Fanning summarizer
+ * calls across this list round-robins the work over *different* free providers,
+ * multiplying free-tier rate limits instead of draining one.
+ */
+export function fastChain(): string[] {
+  const chain: string[] = [];
+  for (const p of catalog.providers) {
+    if (!isMockMode() && !hasKey(p)) continue;
+    if (getCooldown(p.id)) continue;
+    chain.push(`${p.id}/${(p as CatalogEntry).fast ?? p.defaultModel}`);
   }
   return chain;
 }

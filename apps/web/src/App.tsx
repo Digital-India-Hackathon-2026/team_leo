@@ -76,12 +76,13 @@ export default function App() {
   const [wsOpen, setWsOpen] = useState(true);
   const [wsTab, setWsTab] = useState<WsTab>("files");
   const [preview, setPreview] = useState<{ path: string; content: string } | null>(null);
+  const [crew, setCrew] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const transport = useMemo(
-    () => new DefaultChatTransport({ api: "/api/chat", body: () => ({ sessionId, model, mode }) }),
-    [sessionId, model, mode]
+    () => new DefaultChatTransport({ api: "/api/chat", body: () => ({ sessionId, model, mode, orchestrate: crew }) }),
+    [sessionId, model, mode, crew]
   );
   const { messages, sendMessage, status, setMessages } = useChat({ transport });
 
@@ -288,6 +289,13 @@ export default function App() {
                 ))}
               </select>
             </label>
+            <button
+              className={`ctl toggle${crew ? " on" : ""}`}
+              title="Model Crew — a fast scout gathers file context across free providers before the brain answers"
+              onClick={() => setCrew((v) => !v)}
+            >
+              ⚡ Crew
+            </button>
             <div className="spacer" />
             <button className="send" onClick={send} disabled={status === "streaming" || !input.trim()}>
               {status === "streaming" ? "…" : "↑"}

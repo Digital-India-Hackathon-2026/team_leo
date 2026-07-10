@@ -35,17 +35,31 @@ export async function createSession(
   return meta.id;
 }
 
+export interface OrchestrationStage {
+  stage: string;
+  model: string;
+  ms: number;
+  detail: string;
+}
 export interface ChatHandlers {
   onTextDelta: (delta: string) => void;
   onFallback?: (from: string, to: string) => void;
   onCompaction?: (info: { keptRecent?: number }) => void;
+  onOrchestration?: (stage: OrchestrationStage) => void;
   onError?: (message: string) => void;
 }
 
 /** POST /api/chat and dispatch the SSE UIMessage stream to handlers. */
 export async function streamChat(
   base: string,
-  body: { sessionId?: string; messages: UIMessage[]; model?: string; mode?: Mode; disabledTools?: string[] },
+  body: {
+    sessionId?: string;
+    messages: UIMessage[];
+    model?: string;
+    mode?: Mode;
+    disabledTools?: string[];
+    orchestrate?: boolean;
+  },
   handlers: ChatHandlers,
   signal?: AbortSignal
 ): Promise<void> {
@@ -99,6 +113,9 @@ function dispatch(chunk: Record<string, unknown>, h: ChatHandlers): void {
     }
     case "data-compaction":
       h.onCompaction?.((chunk.data as { keptRecent?: number }) ?? {});
+      break;
+    case "data-orchestration":
+      if (chunk.data) h.onOrchestration?.(chunk.data as OrchestrationStage);
       break;
     case "error":
       h.onError?.(String(chunk.errorText ?? "unknown error"));

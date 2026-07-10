@@ -232,6 +232,7 @@ app.post("/api/chat", async (c) => {
     cwd: WS_ROOT,
     extraTools,
     disabledTools: body.disabledTools,
+    orchestrate: body.orchestrate,
     system: ctx.system || undefined,
     onFallback: (from, to, reason) =>
       console.warn(`[fallback] ${from} → ${to}: ${reason.slice(0, 200)}`),

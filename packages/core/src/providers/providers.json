@@ -20,6 +20,7 @@
       "envVar": "GROQ_API_KEY",
       "defaultModel": "llama-3.3-70b-versatile",
       "models": ["llama-3.3-70b-versatile", "qwen/qwen3-32b", "llama-3.1-8b-instant"],
+      "fast": "llama-3.1-8b-instant",
       "quotaNote": "Free: ~30 RPM / daily token caps, no card. Fastest inference — used for quick calls & Auto-mode routing.",
       "contextWindows": { "llama-3.3-70b-versatile": 131072, "qwen/qwen3-32b": 131072, "llama-3.1-8b-instant": 131072 }
     },
@@ -49,6 +50,7 @@
         "meta-llama/llama-3.3-70b-instruct:free",
         "openai/gpt-oss-20b:free"
       ],
+      "fast": "openai/gpt-oss-20b:free",
       "quotaNote": "Free: 20 RPM, 50 req/day (1000/day if you ever bought $10 credits). Rotating :free models — enable the data/privacy setting in your OpenRouter account or :free calls 402.",
       "contextWindows": { "openai/gpt-oss-120b:free": 131072, "qwen/qwen3-coder:free": 262144, "meta-llama/llama-3.3-70b-instruct:free": 131072, "openai/gpt-oss-20b:free": 131072 }
     },
@@ -73,6 +75,7 @@
       "envVar": "GITHUB_MODELS_TOKEN",
       "defaultModel": "openai/gpt-4o-mini",
       "models": ["openai/gpt-4o-mini", "meta/llama-3.3-70b-instruct"],
+      "fast": "openai/gpt-4o-mini",
       "quotaNote": "Free with any GitHub account (rate-limited per day). Fine-grained PAT works.",
       "contextWindows": { "openai/gpt-4o-mini": 128000, "meta/llama-3.3-70b-instruct": 131072 }
     },

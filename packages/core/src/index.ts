@@ -45,6 +45,22 @@ export {
   type CompactionResult,
 } from "./agent/compaction.js";
 export {
+  runScout,
+  buildRepoTree,
+  pickFiles,
+  briefFiles,
+  isCodeTask,
+  type OrchestrationStage,
+  type ScoutResult,
+} from "./agent/scout.js";
+export {
+  modelForRole,
+  nextParallelRef,
+  resetParallelCursor,
+  type ModelRole,
+} from "./providers/roles.js";
+export { fastChain } from "./providers/registry.js";
+export {
   McpManager,
   getMcpManager,
   loadMcpConfig,

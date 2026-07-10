@@ -43,6 +43,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<Mode>("default");
   const [busy, setBusy] = useState(false);
+  const [crew, setCrew] = useState(false);
   const [tokens, setTokens] = useState(0);
   const [sessionId, setSessionId] = useState<string | undefined>();
   const abortRef = useRef<AbortController | null>(null);
@@ -151,8 +152,14 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
       case "compact":
         sys(`compaction is automatic near the context limit (currently ${ctxPct.toFixed(0)}% of ${fmtNum(ctxWindow)}).`);
         return;
+      case "crew": {
+        const on = args[0] ? args[0] === "on" : !crew;
+        setCrew(on);
+        sys(`⚡ Model Crew ${on ? "ON" : "off"} — ${on ? "a fast scout gathers file context before the brain answers" : "single-model turns"}`);
+        return;
+      }
       case "help":
-        sys("/init /memory /skills /mcp /rewind [n] /usage /compact /mode <m> /model <ref> /connect /exit · Shift+Tab cycles modes · Esc interrupts");
+        sys("/init /memory /skills /mcp /rewind [n] /usage /compact /crew [on|off] /mode <m> /model <ref> /connect /exit · Shift+Tab cycles modes · Esc interrupts");
         return;
       default:
         sys(`Unknown command: /${name}`);
@@ -181,6 +188,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
           messages,
           model: model.startsWith("(") ? undefined : model,
           mode,
+          orchestrate: crew,
         },
         {
           onTextDelta: (delta) =>
@@ -195,6 +203,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
               return copy;
             }),
           onFallback: (from, to) => sys(`⇄ fallback: ${from} → ${to}`),
+          onOrchestration: (s) => sys(`⚡ ${s.stage} ${s.model} — ${s.detail} · ${(s.ms / 1000).toFixed(1)}s`),
           onCompaction: () => sys("⟳ history auto-compacted to fit the context window"),
           onError: (m) => sys(`✖ ${m}`),
         },
@@ -248,6 +257,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
       <Box gap={2}>
         <Text dimColor>{model}</Text>
         <Text color={mode === "auto" ? "yellow" : mode === "plan" ? "blue" : "gray"}>{modeInfo.chip}</Text>
+        {crew && <Text color="magentaBright">⚡ Crew</Text>}
         <Text dimColor>
           {fmtNum(tokens)}
           {ctxWindow > 0 ? `/${fmtNum(ctxWindow)} · ${ctxPct.toFixed(ctxPct < 10 ? 1 : 0)}%` : " tok"}

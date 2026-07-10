@@ -9,6 +9,7 @@ import type { ModelMessage, ToolSet, UIMessage, UIMessageChunk } from "ai";
 import type { Mode, TokenUsage } from "@personacode/contracts";
 import { buildTools } from "../tools/index.js";
 import { compactConversation, shouldCompact } from "./compaction.js";
+import { runScout } from "./scout.js";
 import { defaultModelRef, fallbackChain, getModel, setCooldown } from "../providers/registry.js";
 import type { ProviderId } from "@personacode/contracts";
 
@@ -39,6 +40,8 @@ export interface AgentRunOptions {
   extraTools?: ToolSet;
   /** Auto-compact the history when it nears the model's context window (default true). */
   autoCompact?: boolean;
+  /** Model Crew: run the scout→brief pipeline before the brain turn (opt-in). */
+  orchestrate?: boolean;
   system?: string;
   /** fires once, after the successful attempt fully streams */
   onFinishTurn?: (r: AgentTurnResult) => void | Promise<void>;
@@ -79,6 +82,14 @@ function providerOf(ref: string): ProviderId {
   return ref.slice(0, ref.indexOf("/")) as ProviderId;
 }
 
+/** Text of the most recent user message (for scout task + memory recall). */
+function lastUserText(messages: UIMessage[]): string {
+  const last = [...messages].reverse().find((m) => m.role === "user");
+  return (last?.parts ?? [])
+    .map((p) => ((p as { type: string; text?: string }).type === "text" ? (p as { text?: string }).text ?? "" : ""))
+    .join(" ");
+}
+
 /**
  * Agent turn with streaming + provider fallback + context handoff.
  *
@@ -96,6 +107,27 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
   return createUIMessageStream({
     execute: async ({ writer }) => {
       let modelMessages = await convertToModelMessages(opts.messages);
+
+      // Model Crew orchestration (opt-in): a fast scout picks relevant files and fast
+      // summarizers brief them in parallel; the brief is injected so the brain starts
+      // with context already known. Strictly additive — any failure just skips it.
+      let orchestrationBrief = "";
+      if (opts.orchestrate) {
+        try {
+          const task = lastUserText(opts.messages);
+          const scout = await runScout({ cwd, task });
+          if (scout) {
+            for (const st of scout.stages) {
+              writer.write({ type: "data-orchestration", data: st } as unknown as UIMessageChunk);
+            }
+            if (scout.brief) {
+              orchestrationBrief = `\n\nCONTEXT BRIEF (gathered by Model Crew scout — files already read, don't re-read them):\n${scout.brief}`;
+            }
+          }
+        } catch {
+          /* orchestration is additive; fall through to the normal turn */
+        }
+      }
 
       // Auto-compaction: if the history nears the context window, summarize the older
       // turns and carry the brief in the system prompt (fail-soft — keep full history
@@ -134,6 +166,7 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
             MODE_HINTS[mode] +
             (opts.system ? `\n${opts.system}` : "") +
             (compactionBrief ? `\n\n${compactionBrief}` : "") +
+            orchestrationBrief +
             handoffNote,
           messages: modelMessages,
           tools: {

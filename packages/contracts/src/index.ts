@@ -71,6 +71,19 @@ export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 export const ModeSchema = z.enum(["default", "plan", "auto", "edit"]);
 export type Mode = z.infer<typeof ModeSchema>;
 
+// ---------- Model Crew (multi-model orchestration) ----------
+export const ModelRoleSchema = z.enum(["scout", "summarizer", "brain", "reviewer", "router"]);
+export type ModelRole = z.infer<typeof ModelRoleSchema>;
+
+/** One step of the scout pipeline, streamed to clients as a `data-orchestration` chunk. */
+export const OrchestrationStageSchema = z.object({
+  stage: z.enum(["scout", "brief", "review"]),
+  model: z.string(),
+  ms: z.number(),
+  detail: z.string(),
+});
+export type OrchestrationStage = z.infer<typeof OrchestrationStageSchema>;
+
 export const MODE_LABELS: Record<Mode, { chip: string; warning?: string }> = {
   default: { chip: "DEFAULT" },
   plan: { chip: "⏸ PLAN — read-only" },
