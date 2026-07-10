@@ -5,7 +5,7 @@ import {
   stepCountIs,
   streamText,
 } from "ai";
-import type { ModelMessage, UIMessage, UIMessageChunk } from "ai";
+import type { ModelMessage, ToolSet, UIMessage, UIMessageChunk } from "ai";
 import type { Mode, TokenUsage } from "@personacode/contracts";
 import { buildTools } from "../tools/index.js";
 import { defaultModelRef, fallbackChain, getModel, setCooldown } from "../providers/registry.js";
@@ -34,6 +34,8 @@ export interface AgentRunOptions {
   mode?: Mode;
   cwd?: string;
   disabledTools?: string[];
+  /** Extra tools (e.g. from MCP servers) merged with the builtins for this turn. */
+  extraTools?: ToolSet;
   system?: string;
   /** fires once, after the successful attempt fully streams */
   onFinishTurn?: (r: AgentTurnResult) => void | Promise<void>;
@@ -109,7 +111,10 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
           model: getModel(ref),
           system: SYSTEM_PROMPT + MODE_HINTS[mode] + (opts.system ? `\n${opts.system}` : "") + handoffNote,
           messages: modelMessages,
-          tools: buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []) }),
+          tools: {
+            ...buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []) }),
+            ...(opts.extraTools ?? {}),
+          },
           stopWhen: stepCountIs(16),
           onFinish: ({ text, totalUsage }) => {
             finished = {

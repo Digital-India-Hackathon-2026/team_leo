@@ -36,3 +36,13 @@ export {
   type SkillFile,
   type Frontmatter,
 } from "./context/index.js";
+export {
+  McpManager,
+  getMcpManager,
+  loadMcpConfig,
+  mcpConfigPath,
+  mcpToolName,
+  isHttpConfig,
+  type McpToolInfo,
+  type McpServerConfig,
+} from "./mcp/index.js";

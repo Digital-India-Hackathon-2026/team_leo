@@ -15,6 +15,7 @@ import {
   compareModels,
   contextWindowFor,
   defaultModelRef,
+  getMcpManager,
   isMockMode,
   listModels,
   listProviders,
@@ -52,6 +53,16 @@ app.use("/api/*", cors());
 app.get("/api/health", (c) => c.json({ ok: true, mock: isMockMode() }));
 app.get("/api/providers", (c) => c.json(listProviders()));
 app.get("/api/models", (c) => c.json(listModels()));
+
+// MCP server status + tool inventory (from .personacode/mcp.json in the workspace).
+app.get("/api/mcp", async (c) => {
+  const mcp = getMcpManager();
+  await mcp.ensureConnected(WS_ROOT);
+  return c.json({
+    servers: mcp.status(),
+    tools: mcp.listTools().map((t) => ({ name: t.qualifiedName, server: t.server, description: t.description })),
+  });
+});
 
 // ---- workspace files (powers the Files tab) ----
 // The project the agent works on. pnpm runs the server with cwd=apps/server, so
@@ -174,11 +185,18 @@ app.post("/api/chat", async (c) => {
     .join(" ");
   const ctx = await buildProjectContext({ cwd: WS_ROOT, query });
 
+  // Connect configured MCP servers (memoized) and expose their tools this turn.
+  const mcp = getMcpManager();
+  await mcp.ensureConnected(WS_ROOT);
+  const extraTools = mcp.buildToolSet({ mode, disabled: new Set(body.disabledTools ?? []) });
+
   const stream = runAgentTurn({
     messages,
     modelRef,
     mode,
     cwd: WS_ROOT,
+    extraTools,
+    disabledTools: body.disabledTools,
     system: ctx.system || undefined,
     onFallback: (from, to, reason) =>
       console.warn(`[fallback] ${from} → ${to}: ${reason.slice(0, 200)}`),
