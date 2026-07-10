@@ -1,7 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import type { ModelInfo, Mode, SessionMeta } from "@personacode/contracts";
+import { MODE_LABELS } from "@personacode/contracts";
+import MarkdownRenderer from "./components/MarkdownRenderer";
+import ToolCallCard from "./components/ToolCallCard";
+import UsagePanel from "./components/UsagePanel";
+import ThemePicker from "./components/ThemePicker";
+import ComparePage from "./pages/ComparePage";
+import SettingsPage from "./pages/SettingsPage";
+import NotesPage from "./pages/NotesPage";
+import TasksPage from "./pages/TasksPage";
+import GalleryPage from "./pages/GalleryPage";
+import CookbookPage from "./pages/CookbookPage";
+import { timeAgo } from "./utils/timeAgo";
+
+type AppView = "chat" | "compare" | "settings" | "notes" | "tasks" | "gallery" | "cookbook";
 
 const MODES: Mode[] = ["default", "plan", "auto", "edit"];
 const MODE_META: Record<Mode, { label: string; hint: string; tone: "" | "plan" | "auto" | "edit" }> = {
@@ -12,7 +26,7 @@ const MODE_META: Record<Mode, { label: string; hint: string; tone: "" | "plan" |
 };
 
 type FileNode = { name: string; path: string; type: "dir" | "file"; size?: number; children?: FileNode[] };
-type WsTab = "files" | "artifacts" | "todos";
+type WsTab = "files" | "artifacts" | "todos" | "usage";
 
 function shortModel(ref?: string): string {
   if (!ref) return "model";
@@ -70,6 +84,7 @@ export default function App() {
   const [model, setModel] = useState<string>();
   const [mode, setMode] = useState<Mode>("default");
   const [input, setInput] = useState("");
+  const [view, setView] = useState<AppView>("chat");
 
   const [tree, setTree] = useState<FileNode[]>([]);
   const [wsRoot, setWsRoot] = useState("workspace");
@@ -79,6 +94,9 @@ export default function App() {
   const [crew, setCrew] = useState(false);
   // Answered tool-permission requests: id → the decision taken (hides the buttons).
   const [answered, setAnswered] = useState<Record<string, string>>({});
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const prevStatus = useRef<string | undefined>(undefined);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   async function decide(id: string, decision: "allow" | "deny" | "always") {
     setAnswered((a) => ({ ...a, [id]: decision }));
@@ -90,6 +108,29 @@ export default function App() {
   }
 
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Copy full text of a message to clipboard.
+  const copyMessage = useCallback((id: string, parts: Array<{ type: string; text?: string }>) => {
+    const text = parts
+      .filter((p) => p.type === "text")
+      .map((p) => p.text ?? "")
+      .join("\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 1800);
+    });
+  }, []);
+
+  // Delete a session.
+  async function deleteSession(e: React.MouseEvent, id: string) {
+    e.stopPropagation();
+    await fetch(`/api/sessions/${id}`, { method: "DELETE" });
+    setSessions((s) => s.filter((x) => x.id !== id));
+    if (sessionId === id) {
+      setSessionId(undefined);
+      setMessages([]);
+    }
+  }
 
   const transport = useMemo(
     () =>
@@ -122,6 +163,14 @@ export default function App() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, status]);
+
+  // Refresh sessions list after streaming completes (fixes "New session" title bug).
+  useEffect(() => {
+    if (prevStatus.current === "streaming" && status !== "streaming") {
+      fetch("/api/sessions").then((r) => r.json()).then(setSessions).catch(() => {});
+    }
+    prevStatus.current = status;
+  }, [status]);
 
   async function newSession() {
     const res = await fetch("/api/sessions", {
@@ -179,14 +228,47 @@ export default function App() {
               title={s.title}
             >
               <span className="dot" />
-              <span className="s-title">{s.title}</span>
+              <div className="s-info">
+                <span className="s-title">{s.title}</span>
+                <span className="s-time">{timeAgo(s.updatedAt)}</span>
+              </div>
+              <button
+                className="s-delete"
+                title="Delete session"
+                onClick={(e) => deleteSession(e, s.id)}
+              >
+                ✕
+              </button>
             </button>
           ))}
         </nav>
+        <div className="rail-nav">
+          <button className={`rail-link ${view === "chat" ? "on" : ""}`} onClick={() => setView("chat")}>◇ Chat</button>
+          <button className={`rail-link ${view === "compare" ? "on" : ""}`} onClick={() => setView("compare")}>⇌ Compare</button>
+          <button className={`rail-link ${view === "notes" ? "on" : ""}`} onClick={() => setView("notes")}>📝 Notes</button>
+          <button className={`rail-link ${view === "tasks" ? "on" : ""}`} onClick={() => setView("tasks")}>☑ Tasks</button>
+          <button className={`rail-link ${view === "gallery" ? "on" : ""}`} onClick={() => setView("gallery")}>🖼 Gallery</button>
+          <button className={`rail-link ${view === "cookbook" ? "on" : ""}`} onClick={() => setView("cookbook")}>📖 Cookbook</button>
+          <button className={`rail-link ${view === "settings" ? "on" : ""}`} onClick={() => setView("settings")}>⚙ Settings</button>
+        </div>
+        <ThemePicker />
         <div className="rail-foot">Free-first · private · multi-provider</div>
       </aside>
 
-      {/* ---------------- conversation ---------------- */}
+      {/* ---------------- main content ---------------- */}
+      {view === "compare" ? (
+        <main className="chat"><ComparePage /></main>
+      ) : view === "settings" ? (
+        <main className="chat"><SettingsPage /></main>
+      ) : view === "notes" ? (
+        <main className="chat"><NotesPage /></main>
+      ) : view === "tasks" ? (
+        <main className="chat"><TasksPage /></main>
+      ) : view === "gallery" ? (
+        <main className="chat"><GalleryPage /></main>
+      ) : view === "cookbook" ? (
+        <main className="chat"><CookbookPage /></main>
+      ) : (
       <main className="chat">
         <header className="chat-top">
           <div className="crumbs">
@@ -212,13 +294,25 @@ export default function App() {
             ) : (
               messages.map((m) => (
                 <div key={m.id} className={`turn ${m.role}`}>
-                  <div className="who">{m.role === "user" ? "You" : "Personacode"}</div>
+                  <div className="who-row">
+                    <span className="who">{m.role === "user" ? "You" : "Personacode"}</span>
+                    {(m as unknown as { createdAt?: string | number }).createdAt && <span className="msg-time">{timeAgo(new Date((m as unknown as { createdAt: string | number }).createdAt).getTime())}</span>}
+                    <button
+                      className={`copy-btn ${copiedId === m.id ? "copied" : ""}`}
+                      title="Copy message"
+                      onClick={() => copyMessage(m.id, m.parts as Array<{ type: string; text?: string }>)}
+                    >
+                      {copiedId === m.id ? "✓" : "📋"}
+                    </button>
+                  </div>
                   <div className="bubble">
                     {m.parts.map((part, i) => {
                       if (part.type === "text")
-                        return (
+                        return m.role === "assistant" ? (
+                          <MarkdownRenderer key={i} text={(part as { text: string }).text} />
+                        ) : (
                           <div key={i} className="text">
-                            {part.text}
+                            {(part as { text: string }).text}
                           </div>
                         );
                       if (part.type === "data-fallback") {
@@ -272,20 +366,19 @@ export default function App() {
                         );
                       }
                       if (part.type.startsWith("tool-"))
-                        return (
-                          <div key={i} className="chip tool">
-                            🔧 {part.type.replace("tool-", "")}
-                          </div>
-                        );
+                        return <ToolCallCard key={i} part={part as { type: string; toolInvocation?: { toolName?: string; args?: unknown; result?: unknown; state?: string } }} />;
                       return null;
                     })}
                   </div>
                 </div>
               ))
             )}
-            {status === "streaming" && (
+            {status === "streaming" && (messages.length === 0 || messages[messages.length - 1].role !== "assistant") && (
               <div className="turn assistant">
-                <div className="who">Personacode</div>
+                <div className="who-row">
+                  <span className="who">Personacode</span>
+                  {model && <span className="streaming-model">using {shortModel(model)}</span>}
+                </div>
                 <div className="bubble">
                   <span className="cursor" />
                 </div>
@@ -296,19 +389,30 @@ export default function App() {
 
         {modeTone && (
           <div className={`mode-banner ${modeTone}`}>
-            {mode === "auto" ? "⚠" : mode === "plan" ? "⏸" : "✎"} {MODE_META[mode].label} — {MODE_META[mode].hint}
+            {MODE_LABELS[mode].chip}
           </div>
         )}
 
         {/* ---------------- composer ---------------- */}
         <div className="composer">
           <textarea
+            ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              // Auto-grow textarea
+              const ta = e.target;
+              ta.style.height = "auto";
+              ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 send();
+                // Reset height after send
+                if (textareaRef.current) {
+                  textareaRef.current.style.height = "auto";
+                }
               }
             }}
             placeholder="Message Personacode…  (Enter to send, Shift+Enter for a new line)"
@@ -352,6 +456,7 @@ export default function App() {
           </div>
         </div>
       </main>
+      )}
 
       {/* ---------------- workspace ---------------- */}
       {wsOpen && (
@@ -363,7 +468,7 @@ export default function App() {
             </button>
           </div>
           <div className="ws-tabs">
-            {(["files", "artifacts", "todos"] as WsTab[]).map((t) => (
+            {(["files", "artifacts", "todos", "usage"] as WsTab[]).map((t) => (
               <button key={t} className={`ws-tab ${wsTab === t ? "on" : ""}`} onClick={() => setWsTab(t)}>
                 {t[0].toUpperCase() + t.slice(1)}
                 {t === "artifacts" && <span className="count">0</span>}
@@ -383,6 +488,9 @@ export default function App() {
             )}
             {wsTab === "todos" && (
               <p className="ws-empty">Plan-mode steps and task lists will land here.</p>
+            )}
+            {wsTab === "usage" && (
+              <UsagePanel sessionId={sessionId} />
             )}
           </div>
 
