@@ -18,8 +18,10 @@ import {
   defaultModelRef,
   getMcpManager,
   isMockMode,
+  listMemories,
   listModels,
   listProviders,
+  listSkills,
   runAgentTurn,
 } from "@personacode/core";
 import { existsSync, readFileSync } from "node:fs";
@@ -138,6 +140,16 @@ app.get("/api/file", async (c) => {
   } catch {
     return c.json({ error: "not found or not text" }, 404);
   }
+});
+
+// ---- memory + skills (project context inventory) ----
+app.get("/api/memory", async (c) => {
+  const memories = await listMemories(WS_ROOT);
+  return c.json({ memories: memories.map((m) => ({ name: m.name, description: m.description })) });
+});
+app.get("/api/skills", async (c) => {
+  const skills = await listSkills(WS_ROOT);
+  return c.json({ skills: skills.map((s) => ({ name: s.name, description: s.description })) });
 });
 
 // ---- checkpoints (shadow-git rewind) ----
