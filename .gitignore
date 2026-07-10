@@ -8,6 +8,7 @@ build/
 # Runtime dirs live wherever the CLI/server is launched — ignore at any depth
 **/.personacode/data/
 **/.personacode/checkpoints/
+**/.personacode/plans/
 *.log
 .DS_Store
 Thumbs.db

@@ -15,6 +15,8 @@
  *   GET  /api/sessions/:id               → Session
  *   DELETE /api/sessions/:id             → { ok: true }
  *   POST /api/chat                       → UIMessage SSE stream  (body: ChatRequest; AI SDK v5 useChat-compatible)
+ *                                          data chunks: data-fallback, data-compaction, data-orchestration (Model Crew),
+ *                                          data-pav (PAV loop, see PavStage), data-permission-request (approvals)
  *   GET  /api/sessions/:id/usage        → UsageReport
  *   POST /api/compare                    → CompareResponse       (body: CompareRequest)
  *   POST /api/share/:id                  → { url: string }       (freeze session snapshot)
@@ -84,6 +86,28 @@ export const OrchestrationStageSchema = z.object({
 });
 export type OrchestrationStage = z.infer<typeof OrchestrationStageSchema>;
 
+// ---------- PAV Loop (Plan → Apply → Verify) ----------
+/**
+ * One phase of the PAV loop, streamed to clients as a `data-pav` chunk (opt-in via
+ * ChatRequest.pav). Render as a pipeline: plan (with the plan markdown + saved path),
+ * one or more apply/verify iterations, then done (passed = whether checks went green).
+ */
+export const PavStageSchema = z.object({
+  phase: z.enum(["plan", "apply", "verify", "done"]),
+  detail: z.string(),
+  model: z.string().optional(),
+  ms: z.number().optional(),
+  iteration: z.number().optional(),
+  passed: z.boolean().optional(),
+  /** plan phase: the generated plan markdown + workspace-relative path it was saved to. */
+  plan: z.string().optional(),
+  planPath: z.string().optional(),
+  /** verify phase: the command run and (on failure) its captured output. */
+  command: z.string().optional(),
+  output: z.string().optional(),
+});
+export type PavStage = z.infer<typeof PavStageSchema>;
+
 export const MODE_LABELS: Record<Mode, { chip: string; warning?: string }> = {
   default: { chip: "DEFAULT" },
   plan: { chip: "⏸ PLAN — read-only" },
@@ -147,6 +171,8 @@ export const ChatRequestSchema = z.object({
   disabledTools: z.array(z.string()).optional(),
   /** Model Crew: run the multi-model scout→brief pipeline before the brain turn. */
   orchestrate: z.boolean().optional(),
+  /** PAV Loop: run Plan→Apply→Verify (streams `data-pav` chunks) instead of a plain turn. */
+  pav: z.boolean().optional(),
   /** Client can answer `data-permission-request` prompts (y/n/always) via POST /api/permission. */
   approvals: z.boolean().optional(),
 });

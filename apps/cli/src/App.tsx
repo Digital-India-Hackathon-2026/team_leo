@@ -46,6 +46,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
   const [mode, setMode] = useState<Mode>("default");
   const [busy, setBusy] = useState(false);
   const [crew, setCrew] = useState(false);
+  const [pav, setPav] = useState(false);
   const [tokens, setTokens] = useState(0);
   const [sessionId, setSessionId] = useState<string | undefined>();
   const abortRef = useRef<AbortController | null>(null);
@@ -175,8 +176,14 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         sys(`⚡ Model Crew ${on ? "ON" : "off"} — ${on ? "a fast scout gathers file context before the brain answers" : "single-model turns"}`);
         return;
       }
+      case "pav": {
+        const on = args[0] ? args[0] === "on" : !pav;
+        setPav(on);
+        sys(`⚙ PAV Loop ${on ? "ON" : "off"} — ${on ? "next message runs Plan → Apply → Verify (edits files, then runs your typecheck/test scripts, looping on failure)" : "normal single turn"}`);
+        return;
+      }
       case "help":
-        sys("/init /memory /skills /mcp /rewind [n] /usage /compact /crew [on|off] /mode <m> /model <ref> /connect /exit · Shift+Tab cycles modes · Esc interrupts");
+        sys("/init /memory /skills /mcp /rewind [n] /usage /compact /crew [on|off] /pav [on|off] /mode <m> /model <ref> /connect /exit · Shift+Tab cycles modes · Esc interrupts");
         return;
       default:
         sys(`Unknown command: /${name}`);
@@ -206,6 +213,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
           model: model.startsWith("(") ? undefined : model,
           mode,
           orchestrate: crew,
+          pav,
           approvals: true,
         },
         {
@@ -222,6 +230,13 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
             }),
           onFallback: (from, to) => sys(`⇄ fallback: ${from} → ${to}`),
           onOrchestration: (s) => sys(`⚡ ${s.stage} ${s.model} — ${s.detail} · ${(s.ms / 1000).toFixed(1)}s`),
+          onPav: (s) =>
+            sys(
+              `⚙ PAV ${s.phase}${s.iteration ? ` #${s.iteration}` : ""} — ${s.detail}` +
+                (s.model ? ` · ${s.model}` : "") +
+                (s.planPath ? ` (${s.planPath})` : "") +
+                (s.ms ? ` · ${(s.ms / 1000).toFixed(1)}s` : "")
+            ),
           onPermission: (req) => setPendingPerm(req),
           onCompaction: () => sys("⟳ history auto-compacted to fit the context window"),
           onError: (m) => sys(`✖ ${m}`),
@@ -292,6 +307,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         <Text dimColor>{model}</Text>
         <Text color={mode === "auto" ? "yellow" : mode === "plan" ? "blue" : "gray"}>{modeInfo.chip}</Text>
         {crew && <Text color="magentaBright">⚡ Crew</Text>}
+        {pav && <Text color="greenBright">⚙ PAV</Text>}
         <Text dimColor>
           {fmtNum(tokens)}
           {ctxWindow > 0 ? `/${fmtNum(ctxWindow)} · ${ctxPct.toFixed(ctxPct < 10 ? 1 : 0)}%` : " tok"}
