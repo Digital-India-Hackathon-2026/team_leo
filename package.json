@@ -20,5 +20,8 @@
     "cross-env": "^10.1.0",
     "tsx": "^4.23.0",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "pnpm": "^11.11.0"
   }
 }
