@@ -130,6 +130,10 @@ export const ChatRequestSchema = z.object({
   messages: z.array(z.unknown()),
   model: z.string().optional(),
   mode: ModeSchema.optional(),
+  /** Qualified tool names toggled off for this turn (builtins or MCP mcp__server__tool). */
+  disabledTools: z.array(z.string()).optional(),
+  /** Model Crew: run the multi-model scout→brief pipeline before the brain turn. */
+  orchestrate: z.boolean().optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 

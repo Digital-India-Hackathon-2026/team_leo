@@ -5,9 +5,10 @@ import {
   stepCountIs,
   streamText,
 } from "ai";
-import type { ModelMessage, UIMessage, UIMessageChunk } from "ai";
+import type { ModelMessage, ToolSet, UIMessage, UIMessageChunk } from "ai";
 import type { Mode, TokenUsage } from "@personacode/contracts";
 import { buildTools } from "../tools/index.js";
+import { compactConversation, shouldCompact } from "./compaction.js";
 import { defaultModelRef, fallbackChain, getModel, setCooldown } from "../providers/registry.js";
 import type { ProviderId } from "@personacode/contracts";
 
@@ -34,6 +35,10 @@ export interface AgentRunOptions {
   mode?: Mode;
   cwd?: string;
   disabledTools?: string[];
+  /** Extra tools (e.g. from MCP servers) merged with the builtins for this turn. */
+  extraTools?: ToolSet;
+  /** Auto-compact the history when it nears the model's context window (default true). */
+  autoCompact?: boolean;
   system?: string;
   /** fires once, after the successful attempt fully streams */
   onFinishTurn?: (r: AgentTurnResult) => void | Promise<void>;
@@ -90,7 +95,24 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
 
   return createUIMessageStream({
     execute: async ({ writer }) => {
-      const modelMessages = await convertToModelMessages(opts.messages);
+      let modelMessages = await convertToModelMessages(opts.messages);
+
+      // Auto-compaction: if the history nears the context window, summarize the older
+      // turns and carry the brief in the system prompt (fail-soft — keep full history
+      // if summarization fails). Emitted as a data-compaction chunk for the UI.
+      let compactionBrief = "";
+      if (opts.autoCompact !== false && shouldCompact(modelMessages, primary)) {
+        const r = await compactConversation({ messages: modelMessages, modelRef: primary });
+        if (r.compacted) {
+          modelMessages = r.messages;
+          compactionBrief = r.summary;
+          writer.write({
+            type: "data-compaction",
+            data: { keptRecent: modelMessages.length, note: "history auto-compacted" },
+          } as unknown as UIMessageChunk);
+        }
+      }
+
       const chain = [primary, ...fallbackChain(primary)];
       let lastError = "";
 
@@ -107,9 +129,17 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
         let finished: AgentTurnResult | undefined;
         const result = streamText({
           model: getModel(ref),
-          system: SYSTEM_PROMPT + MODE_HINTS[mode] + (opts.system ? `\n${opts.system}` : "") + handoffNote,
+          system:
+            SYSTEM_PROMPT +
+            MODE_HINTS[mode] +
+            (opts.system ? `\n${opts.system}` : "") +
+            (compactionBrief ? `\n\n${compactionBrief}` : "") +
+            handoffNote,
           messages: modelMessages,
-          tools: buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []) }),
+          tools: {
+            ...buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []) }),
+            ...(opts.extraTools ?? {}),
+          },
           stopWhen: stepCountIs(16),
           onFinish: ({ text, totalUsage }) => {
             finished = {

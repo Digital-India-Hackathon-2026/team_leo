@@ -83,10 +83,22 @@
       "keyUrl": "https://opencode.ai/zen",
       "baseUrl": "https://opencode.ai/zen/v1",
       "envVar": "OPENCODE_ZEN_API_KEY",
-      "defaultModel": "gemini-3-flash",
-      "models": ["gemini-3-flash", "claude-haiku-4-5"],
-      "quotaNote": "Rotating launch-window $0 models (roster changes often; grok-code retired). Most Zen models are paid — verify a model is in the free rotation before relying on it. Low priority in the fallback chain.",
-      "contextWindows": { "gemini-3-flash": 1048576, "claude-haiku-4-5": 200000 }
+      "defaultModel": "deepseek-v4-flash-free",
+      "models": [
+        "deepseek-v4-flash-free",
+        "mimo-v2.5-free",
+        "north-mini-code-free",
+        "claude-sonnet-5",
+        "claude-haiku-4-5",
+        "gpt-5.5",
+        "gemini-3-flash",
+        "grok-4.5",
+        "kimi-k2.6",
+        "deepseek-v4-pro"
+      ],
+      "fast": "deepseek-v4-flash-free",
+      "quotaNote": "One key → many models, free AND paid (like using OpenCode). The `*-free` models cost $0; the frontier models (Claude/GPT/Gemini/Grok/Kimi/DeepSeek) are pay-as-you-go. Default + fallback use a free model; pick a paid one per-session if you have billing enabled.",
+      "contextWindows": { "deepseek-v4-flash-free": 131072, "mimo-v2.5-free": 131072, "north-mini-code-free": 131072, "claude-sonnet-5": 200000, "claude-haiku-4-5": 200000, "gpt-5.5": 400000, "gemini-3-flash": 1048576, "grok-4.5": 256000, "kimi-k2.6": 262144, "deepseek-v4-pro": 131072 }
     },
     {
       "id": "ollama",

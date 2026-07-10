@@ -13,6 +13,16 @@ const CANNED = [
 /** Streams a canned markdown reply with realistic pacing + usage numbers. */
 export function createMockModel(): LanguageModel {
   return new MockLanguageModelV3({
+    // Non-streaming path (generateText): used by compaction, /compare, title routing.
+    doGenerate: async () => ({
+      content: [{ type: "text" as const, text: CANNED.join("") }],
+      finishReason: { unified: "stop" as const, raw: "stop" },
+      usage: {
+        inputTokens: { total: 42, noCache: 42, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 60, text: 60, reasoning: undefined },
+      },
+      warnings: [],
+    }),
     doStream: async () => ({
       stream: simulateReadableStream<LanguageModelV3StreamPart>({
         chunks: [
