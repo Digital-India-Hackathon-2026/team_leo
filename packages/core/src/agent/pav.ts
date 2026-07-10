@@ -6,8 +6,10 @@ import type { TokenUsage } from "@personacode/contracts";
 import { buildTools } from "../tools/index.js";
 import { defaultModelRef, isMockMode } from "../providers/registry.js";
 import { modelForRole } from "../providers/roles.js";
+import { runFinishHooks } from "../hooks/index.js";
 import { generateWithFallback } from "./loop.js";
 import { detectVerifyCommands, runVerify } from "./verify.js";
+import { captureReviewBaseline, reviewAgentResult } from "./reviewer.js";
 import {
   MODE_HINTS,
   SYSTEM_PROMPT,
@@ -44,7 +46,7 @@ export interface PavRunOptions {
 }
 
 export interface PavStage {
-  phase: "plan" | "apply" | "verify" | "done";
+  phase: "plan" | "apply" | "review" | "verify" | "done";
   detail: string;
   model?: string;
   ms?: number;
@@ -101,6 +103,7 @@ export function runPavLoop(opts: PavRunOptions): ReadableStream<UIMessageChunk> 
       const emit = (s: PavStage) => writer.write({ type: "data-pav", data: s } as unknown as UIMessageChunk);
       const task = lastUserText(opts.messages);
       const modelMessages = await convertToModelMessages(opts.messages);
+      const reviewBaseline = await captureReviewBaseline(cwd);
 
       const totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       const addUsage = (u: TokenUsage) => {
@@ -179,6 +182,30 @@ export function runPavLoop(opts: PavRunOptions): ReadableStream<UIMessageChunk> 
         }
         emit({ phase: "apply", iteration: runs, model: usedRef, ms: Date.now() - applyStart, detail: "changes applied" });
 
+        // REVIEWER quality gate. It prefers a provider different from the Apply model.
+        const review = await reviewAgentResult({
+          cwd,
+          task,
+          plan: planMarkdown,
+          result: finalText,
+          avoidModel: usedRef,
+          baseline: reviewBaseline,
+        });
+        addUsage(review.usage);
+        emit({
+          phase: "review",
+          iteration: runs,
+          model: review.model,
+          ms: review.ms,
+          passed: review.passed,
+          detail: review.critique,
+          output: review.passed ? undefined : review.critique,
+        });
+        if (!review.passed) {
+          attemptLog += `\n\nATTEMPT ${runs} did NOT pass reviewer quality gate.\n${review.critique}\nFix this blocking issue in your next edits.`;
+          continue;
+        }
+
         // VERIFY
         const verifyStart = Date.now();
         if (isMockMode()) {
@@ -222,7 +249,9 @@ export function runPavLoop(opts: PavRunOptions): ReadableStream<UIMessageChunk> 
         detail: passed ? `verified ✓ after ${runs} iteration(s)` : `stopped after ${maxIter} iteration(s) — still failing`,
       });
 
-      if (opts.onFinishTurn) await opts.onFinishTurn({ text: finalText, usage: totalUsage, modelRef: usedRef });
+      const finalResult = { text: finalText, usage: totalUsage, modelRef: usedRef };
+      await runFinishHooks(cwd, { result: finalResult }).catch(() => undefined);
+      if (opts.onFinishTurn) await opts.onFinishTurn(finalResult);
     },
   });
 }

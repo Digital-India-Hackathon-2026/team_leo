@@ -4,8 +4,14 @@ import { z } from "zod";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
+import { lookup } from "node:dns/promises";
+import { BlockList, type LookupFunction } from "node:net";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import type { Mode } from "@personacode/contracts";
+import { runToolHooks } from "../hooks/index.js";
+import { resolveWorkspacePath } from "../security/paths.js";
 
 const execAsync = promisify(exec);
 
@@ -37,6 +43,101 @@ export interface ToolPolicy {
 /** Side-effecting tools that require confirmation in Default mode. */
 const NEEDS_APPROVAL = new Set(["bash", "write_file"]);
 
+const blockedAddresses = new BlockList();
+for (const [network, prefix] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
+  ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.168.0.0", 16],
+  ["198.18.0.0", 15], ["224.0.0.0", 4], ["240.0.0.0", 4],
+] as Array<[string, number]>) blockedAddresses.addSubnet(network, prefix, "ipv4");
+for (const [network, prefix] of [
+  ["::", 128], ["::1", 128], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8],
+] as Array<[string, number]>) blockedAddresses.addSubnet(network, prefix, "ipv6");
+
+function blockedAddress(address: string, family: number): boolean {
+  const mapped = address.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (mapped) return blockedAddresses.check(mapped[1]!, "ipv4");
+  return blockedAddresses.check(address, family === 6 ? "ipv6" : "ipv4");
+}
+
+async function publicEndpoint(value: string): Promise<{ url: URL; address: string; family: 4 | 6 }> {
+  const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("only HTTP(S) URLs are allowed");
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) throw new Error("local URLs are not allowed");
+  const addresses = await lookup(hostname, { all: true });
+  if (addresses.some(({ address, family }) => blockedAddress(address, family))) {
+    throw new Error("private-network URLs are not allowed");
+  }
+  const selected = addresses[0];
+  if (!selected) throw new Error("host did not resolve");
+  return { url, address: selected.address, family: selected.family === 6 ? 6 : 4 };
+}
+
+async function fetchPublicText(value: string): Promise<string> {
+  let current = new URL(value);
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    const endpoint = await publicEndpoint(current.href);
+    const response = await new Promise<{ status: number; location?: string; text: string }>((resolve, reject) => {
+      const pinnedLookup: LookupFunction = (_hostname, options, callback) => {
+        if (options.all) callback(null, [{ address: endpoint.address, family: endpoint.family }]);
+        else callback(null, endpoint.address, endpoint.family);
+      };
+      let request: ReturnType<typeof httpRequest>;
+      const deadline = setTimeout(() => request?.destroy(new Error("request timed out")), 15_000);
+      const succeed = (value: { status: number; location?: string; text: string }) => {
+        clearTimeout(deadline);
+        resolve(value);
+      };
+      const fail = (error: Error) => {
+        clearTimeout(deadline);
+        reject(error);
+      };
+      request = (current.protocol === "https:" ? httpsRequest : httpRequest)(
+        current,
+        {
+          lookup: pinnedLookup,
+          headers: { accept: "text/html,text/plain,application/json;q=0.9,*/*;q=0.5" },
+        },
+        (incoming) => {
+          const status = incoming.statusCode ?? 0;
+          const location = incoming.headers.location;
+          if (status >= 300 && status < 400) {
+            incoming.resume();
+            succeed({ status, location, text: "" });
+            return;
+          }
+          const declared = Number(incoming.headers["content-length"] ?? 0);
+          if (declared > 2_000_000) {
+            incoming.destroy();
+            fail(new Error("response is too large"));
+            return;
+          }
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          incoming.on("data", (chunk: Buffer) => {
+            bytes += chunk.length;
+            if (bytes > 2_000_000) incoming.destroy(new Error("response is too large"));
+            else chunks.push(chunk);
+          });
+          incoming.on("end", () => succeed({ status, location, text: Buffer.concat(chunks).toString("utf8") }));
+          incoming.on("error", fail);
+        },
+      );
+      request.on("error", fail);
+      request.end();
+    });
+    if (response.status >= 300 && response.status < 400) {
+      if (!response.location) throw new Error(`HTTP ${response.status} without a redirect location`);
+      const location = response.location;
+      current = new URL(location, current);
+      continue;
+    }
+    if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
+    return response.text;
+  }
+  throw new Error("too many redirects");
+}
+
 async function approve(policy: ToolPolicy, tool: string, input: unknown): Promise<boolean> {
   if (policy.mode !== "default" || !policy.requestApproval || !NEEDS_APPROVAL.has(tool)) return true;
   return policy.requestApproval({ tool, input });
@@ -50,11 +151,39 @@ function allowed(policy: ToolPolicy, toolName: string): boolean {
   return true;
 }
 
-function guard<T>(policy: ToolPolicy, name: string, run: () => Promise<T>): Promise<T | string> {
+async function executeTool<T>(
+  policy: ToolPolicy,
+  name: string,
+  input: unknown,
+  run: () => Promise<T>,
+): Promise<T | string> {
   if (!allowed(policy, name)) {
-    return Promise.resolve(`Tool "${name}" is not allowed in ${policy.mode} mode (or is toggled off).`);
+    return `Tool "${name}" is not allowed in ${policy.mode} mode (or is toggled off).`;
   }
-  return run().catch((err: Error) => `Error in ${name}: ${err.message}`);
+  if (!(await approve(policy, name, input))) return `Denied by user — ${name} not run.`;
+  if (policy.mode !== "plan") {
+    try {
+      await runToolHooks(policy.cwd, "preToolUse", { tool: name, input });
+    } catch (error) {
+      return `Blocked by preToolUse hook for ${name}: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  try {
+    const result = await run();
+    try {
+      if (policy.mode === "plan") return result;
+      const hookOutput = await runToolHooks(policy.cwd, "postToolUse", { tool: name, input, result });
+      return hookOutput.length && typeof result === "string"
+        ? `${result}\n\n[postToolUse]\n${hookOutput.join("\n")}`
+        : result;
+    } catch (error) {
+      return typeof result === "string"
+        ? `${result}\n\n[postToolUse failed: ${error instanceof Error ? error.message : String(error)}]`
+        : result;
+    }
+  } catch (error) {
+    return `Error in ${name}: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 export function buildTools(policy: ToolPolicy): ToolSet {
@@ -64,8 +193,7 @@ export function buildTools(policy: ToolPolicy): ToolSet {
         "Run a shell command in the project directory. Returns stdout+stderr (trimmed if huge).",
       inputSchema: z.object({ command: z.string().describe("The shell command to run") }),
       execute: ({ command }) =>
-        guard(policy, "bash", async () => {
-          if (!(await approve(policy, "bash", { command }))) return "Denied by user — command not run.";
+        executeTool(policy, "bash", { command }, async () => {
           const { stdout, stderr } = await execAsync(command, {
             cwd: policy.cwd,
             timeout: 60_000,
@@ -79,16 +207,16 @@ export function buildTools(policy: ToolPolicy): ToolSet {
       description: "Read a file (UTF-8) relative to the project directory.",
       inputSchema: z.object({ path: z.string() }),
       execute: ({ path }) =>
-        guard(policy, "read_file", async () => diet(await readFile(resolve(policy.cwd, path), "utf8"))),
+        executeTool(policy, "read_file", { path }, async () =>
+          diet(await readFile(await resolveWorkspacePath(policy.cwd, path), "utf8"))),
     }),
 
     write_file: tool({
       description: "Write/overwrite a file (UTF-8), creating parent directories.",
       inputSchema: z.object({ path: z.string(), content: z.string() }),
       execute: ({ path, content }) =>
-        guard(policy, "write_file", async () => {
-          if (!(await approve(policy, "write_file", { path }))) return "Denied by user — file not written.";
-          const full = resolve(policy.cwd, path);
+        executeTool(policy, "write_file", { path, content }, async () => {
+          const full = await resolveWorkspacePath(policy.cwd, path, { write: true });
           await mkdir(dirname(full), { recursive: true });
           await writeFile(full, content, "utf8");
           return `Wrote ${content.length} chars to ${path}`;
@@ -99,9 +227,9 @@ export function buildTools(policy: ToolPolicy): ToolSet {
       description: "List files in a directory (non-recursive) relative to the project.",
       inputSchema: z.object({ path: z.string().default(".") }),
       execute: ({ path }) =>
-        guard(policy, "list_files", async () => {
+        executeTool(policy, "list_files", { path }, async () => {
           const { readdir } = await import("node:fs/promises");
-          const entries = await readdir(resolve(policy.cwd, path), { withFileTypes: true });
+          const entries = await readdir(await resolveWorkspacePath(policy.cwd, path, { allowRoot: path === "." }), { withFileTypes: true });
           return entries.map((e) => (e.isDirectory() ? e.name + "/" : e.name)).join("\n") || "(empty)";
         }),
     }),
@@ -110,9 +238,8 @@ export function buildTools(policy: ToolPolicy): ToolSet {
       description: "Fetch a URL and return its text content (HTML tags stripped, trimmed).",
       inputSchema: z.object({ url: z.string().url() }),
       execute: ({ url }) =>
-        guard(policy, "web_fetch", async () => {
-          const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-          const text = await res.text();
+        executeTool(policy, "web_fetch", { url }, async () => {
+          const text = await fetchPublicText(url);
           const stripped = text
             .replace(/<script[\s\S]*?<\/script>/gi, "")
             .replace(/<style[\s\S]*?<\/style>/gi, "")

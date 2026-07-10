@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { getHealth, DEFAULT_BASE } from "./api.js";
+import { defaultBase, getHealth } from "./api.js";
 
 /** Walk up from `start` to find the monorepo root (has pnpm-workspace.yaml). */
 function findRepoRoot(start: string): string | null {
@@ -29,38 +29,42 @@ export interface ServerHandle {
  * so the caller can tell the user to run `pnpm dev` manually.
  */
 export async function ensureServer(): Promise<ServerHandle & { error?: string }> {
-  const existing = await getHealth();
-  if (existing) return { base: DEFAULT_BASE, mock: existing.mock, started: false };
+  const base = defaultBase();
+  const existing = await getHealth(base);
+  if (existing) return { base, mock: existing.mock, started: false };
 
   const root = findRepoRoot(process.cwd()) ?? findRepoRoot(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")));
   const entry = root ? join(root, "apps", "server", "src", "index.ts") : null;
   if (!root || !entry || !existsSync(entry)) {
-    return { base: DEFAULT_BASE, mock: false, started: false, error: "server not running and repo root not found" };
+    return { base, mock: false, started: false, error: "server not running and repo root not found" };
   }
 
   let child: ChildProcess;
   try {
     child = spawn(process.execPath, ["--import", "tsx", entry], {
       cwd: root,
-      env: process.env,
+      env: {
+        ...process.env,
+        PERSONACODE_WORKSPACE: process.env.PERSONACODE_WORKSPACE ?? root,
+      },
       stdio: "ignore",
       windowsHide: true,
     });
     child.unref();
   } catch (err) {
-    return { base: DEFAULT_BASE, mock: false, started: false, error: String((err as Error).message) };
+    return { base, mock: false, started: false, error: String((err as Error).message) };
   }
 
   // Poll health for up to ~15s.
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 500));
-    const h = await getHealth();
-    if (h) return { base: DEFAULT_BASE, mock: h.mock, started: true, child };
+    const h = await getHealth(base);
+    if (h) return { base, mock: h.mock, started: true, child };
   }
   try {
     child.kill();
   } catch {
     /* ignore */
   }
-  return { base: DEFAULT_BASE, mock: false, started: false, error: "server did not become healthy in time" };
+  return { base, mock: false, started: false, error: "server did not become healthy in time" };
 }

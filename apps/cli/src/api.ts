@@ -1,19 +1,21 @@
 import type { UIMessage } from "ai";
-import type { Mode } from "@personacode/contracts";
+import type { AgentDefinition, Mode, SetupScoutResponse } from "@personacode/contracts";
 
 /**
  * Thin client for the Personacode server. The CLI routes chat through the server
  * (rather than running the agent in-process) so it inherits PERSONA.md/memory,
  * MCP tools, checkpoints, and auto-compaction, and gets server-backed sessions.
  */
-export const DEFAULT_BASE = `http://localhost:${process.env.PERSONACODE_PORT ?? 3789}`;
+export function defaultBase(): string {
+  return `http://localhost:${process.env.PERSONACODE_PORT ?? 3789}`;
+}
 
 export interface Health {
   ok: boolean;
   mock: boolean;
 }
 
-export async function getHealth(base = DEFAULT_BASE): Promise<Health | null> {
+export async function getHealth(base = defaultBase()): Promise<Health | null> {
   try {
     const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(1500) });
     return res.ok ? ((await res.json()) as Health) : null;
@@ -47,7 +49,7 @@ export interface PermissionRequest {
   input: unknown;
 }
 export interface PavStage {
-  phase: "plan" | "apply" | "verify" | "done";
+  phase: "plan" | "apply" | "review" | "verify" | "done";
   detail: string;
   model?: string;
   ms?: number;
@@ -75,6 +77,7 @@ export async function streamChat(
     sessionId?: string;
     messages: UIMessage[];
     model?: string;
+    agent?: string;
     mode?: Mode;
     disabledTools?: string[];
     orchestrate?: boolean;
@@ -155,7 +158,7 @@ export interface McpStatus {
   servers: { name: string; connected: boolean; error?: string; tools: string[] }[];
   tools: { name: string; server: string; description: string }[];
 }
-export async function getMcp(base = DEFAULT_BASE): Promise<McpStatus> {
+export async function getMcp(base = defaultBase()): Promise<McpStatus> {
   const res = await fetch(`${base}/api/mcp`);
   return (await res.json()) as McpStatus;
 }
@@ -165,7 +168,7 @@ export interface CheckpointRow {
   label: string;
   time: number;
 }
-export async function getCheckpoints(base = DEFAULT_BASE): Promise<CheckpointRow[]> {
+export async function getCheckpoints(base = defaultBase()): Promise<CheckpointRow[]> {
   const res = await fetch(`${base}/api/checkpoints`);
   return ((await res.json()) as { checkpoints: CheckpointRow[] }).checkpoints;
 }
@@ -174,11 +177,12 @@ export async function respondPermission(
   id: string,
   decision: "allow" | "deny" | "always"
 ): Promise<void> {
-  await fetch(`${base}/api/permission`, {
+  const res = await fetch(`${base}/api/permission`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, decision }),
-  }).catch(() => {});
+  });
+  if (!res.ok) throw new Error(`server responded ${res.status}`);
 }
 
 export async function restoreCheckpoint(base: string, hash: string): Promise<boolean> {
@@ -194,13 +198,58 @@ export interface NamedInfo {
   name: string;
   description: string;
 }
-export async function getMemory(base = DEFAULT_BASE): Promise<NamedInfo[]> {
+export async function getMemory(base = defaultBase()): Promise<NamedInfo[]> {
   const res = await fetch(`${base}/api/memory`);
   return ((await res.json()) as { memories: NamedInfo[] }).memories;
 }
-export async function getSkills(base = DEFAULT_BASE): Promise<NamedInfo[]> {
+export async function getSkills(base = defaultBase()): Promise<NamedInfo[]> {
   const res = await fetch(`${base}/api/skills`);
   return ((await res.json()) as { skills: NamedInfo[] }).skills;
+}
+
+export interface HookInfo {
+  matcher?: string;
+  command: string;
+  timeoutMs?: number;
+}
+export interface HooksResponse {
+  path: string;
+  hooks: {
+    preToolUse: HookInfo[];
+    postToolUse: HookInfo[];
+    onFinish: HookInfo[];
+  };
+  error?: string;
+}
+export async function getHooks(base = defaultBase()): Promise<HooksResponse> {
+  const res = await fetch(`${base}/api/hooks`);
+  if (!res.ok) throw new Error(`server responded ${res.status}`);
+  return (await res.json()) as HooksResponse;
+}
+
+export async function createAgent(
+  base: string,
+  prompt: string,
+): Promise<{ agent: AgentDefinition; path: string }> {
+  const res = await fetch(`${base}/api/agents`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt }),
+  });
+  const body = (await res.json()) as { agent?: AgentDefinition; path?: string; error?: string };
+  if (!res.ok || !body.agent || !body.path) throw new Error(body.error ?? `server responded ${res.status}`);
+  return { agent: body.agent, path: body.path };
+}
+
+export async function runSetupScout(base: string, apply: boolean): Promise<SetupScoutResponse> {
+  const res = await fetch(`${base}/api/setup-scout`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ apply }),
+  });
+  const body = (await res.json()) as SetupScoutResponse & { error?: string };
+  if (!res.ok) throw new Error(body.error ?? `server responded ${res.status}`);
+  return body;
 }
 
 export async function getUsage(
