@@ -46,11 +46,24 @@ export interface PermissionRequest {
   tool: string;
   input: unknown;
 }
+export interface PavStage {
+  phase: "plan" | "apply" | "verify" | "done";
+  detail: string;
+  model?: string;
+  ms?: number;
+  iteration?: number;
+  passed?: boolean;
+  plan?: string;
+  planPath?: string;
+  command?: string;
+  output?: string;
+}
 export interface ChatHandlers {
   onTextDelta: (delta: string) => void;
   onFallback?: (from: string, to: string) => void;
   onCompaction?: (info: { keptRecent?: number }) => void;
   onOrchestration?: (stage: OrchestrationStage) => void;
+  onPav?: (stage: PavStage) => void;
   onPermission?: (req: PermissionRequest) => void;
   onError?: (message: string) => void;
 }
@@ -65,6 +78,7 @@ export async function streamChat(
     mode?: Mode;
     disabledTools?: string[];
     orchestrate?: boolean;
+    pav?: boolean;
     approvals?: boolean;
   },
   handlers: ChatHandlers,
@@ -123,6 +137,9 @@ function dispatch(chunk: Record<string, unknown>, h: ChatHandlers): void {
       break;
     case "data-orchestration":
       if (chunk.data) h.onOrchestration?.(chunk.data as OrchestrationStage);
+      break;
+    case "data-pav":
+      if (chunk.data) h.onPav?.(chunk.data as PavStage);
       break;
     case "data-permission-request":
       if (chunk.data) h.onPermission?.(chunk.data as PermissionRequest);

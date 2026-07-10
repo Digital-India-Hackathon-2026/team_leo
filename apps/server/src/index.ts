@@ -10,6 +10,7 @@ import {
   CreateSessionRequestSchema,
   PermissionDecisionSchema,
 } from "@personacode/contracts";
+import type { TokenUsage } from "@personacode/contracts";
 import {
   SessionStore,
   CheckpointStore,
@@ -24,6 +25,7 @@ import {
   listProviders,
   listSkills,
   runAgentTurn,
+  runPavLoop,
 } from "@personacode/core";
 import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile as fsReadFile, stat } from "node:fs/promises";
@@ -229,9 +231,10 @@ app.post("/api/chat", async (c) => {
     .join(" ");
   const ctx = await buildProjectContext({ cwd: WS_ROOT, query });
 
-  // Auto-checkpoint before any turn that can modify files (not plan mode), so the
-  // user can /rewind. Fail-soft: a checkpoint error must never block the chat.
-  if (mode !== "plan") {
+  // Auto-checkpoint before any turn that can modify files, so the user can /rewind.
+  // PAV always edits (even when launched from plan mode), so checkpoint for it too.
+  // Fail-soft: a checkpoint error must never block the chat.
+  if (mode !== "plan" || body.pav) {
     checkpoints
       .snapshot(`before: ${query.slice(0, 60) || "turn"}`)
       .catch((err) => console.warn(`[checkpoint] skipped: ${err instanceof Error ? err.message : err}`));
@@ -242,35 +245,51 @@ app.post("/api/chat", async (c) => {
   await mcp.ensureConnected(WS_ROOT);
   const extraTools = mcp.buildToolSet({ mode, disabled: new Set(body.disabledTools ?? []) });
 
-  const stream = runAgentTurn({
-    messages,
-    modelRef,
-    mode,
-    cwd: WS_ROOT,
-    extraTools,
-    disabledTools: body.disabledTools,
-    orchestrate: body.orchestrate,
-    // Enable the y/n/always approval gate only when the client can answer prompts.
-    approval: body.approvals ? { waitForDecision: (id) => waitForDecision(id) } : undefined,
-    system: ctx.system || undefined,
-    onFallback: (from, to, reason) =>
-      console.warn(`[fallback] ${from} → ${to}: ${reason.slice(0, 200)}`),
-    onFinishTurn: ({ text, usage, modelRef: usedRef }) => {
-      if (!session) return;
-      session.messages = [
-        ...messages,
-        { id: crypto.randomUUID(), role: "assistant", parts: [{ type: "text", text }] },
-      ];
-      session.model = usedRef;
-      if (session.title === "New session") {
-        const firstUser = messages.find((m) => m.role === "user");
-        const t = firstUser?.parts?.find((p) => p.type === "text") as { text?: string } | undefined;
-        if (t?.text) session.title = t.text.slice(0, 48);
-      }
-      store.save(session);
-      store.addUsage(session.id, usage);
-    },
-  });
+  // Persist the assistant reply + usage into the session (shared by both turn kinds).
+  const onFinishTurn = ({ text, usage, modelRef: usedRef }: { text: string; usage: TokenUsage; modelRef: string }) => {
+    if (!session) return;
+    session.messages = [
+      ...messages,
+      { id: crypto.randomUUID(), role: "assistant", parts: [{ type: "text", text }] },
+    ];
+    session.model = usedRef;
+    if (session.title === "New session") {
+      const firstUser = messages.find((m) => m.role === "user");
+      const t = firstUser?.parts?.find((p) => p.type === "text") as { text?: string } | undefined;
+      if (t?.text) session.title = t.text.slice(0, 48);
+    }
+    store.save(session);
+    store.addUsage(session.id, usage);
+  };
+  const onFallback = (from: string, to: string, reason: string) =>
+    console.warn(`[fallback] ${from} → ${to}: ${reason.slice(0, 200)}`);
+
+  // PAV Loop (opt-in): Plan → Apply → Verify pipeline instead of a plain turn.
+  const stream = body.pav
+    ? runPavLoop({
+        messages,
+        modelRef,
+        cwd: WS_ROOT,
+        extraTools,
+        disabledTools: body.disabledTools,
+        system: ctx.system || undefined,
+        onFallback,
+        onFinishTurn,
+      })
+    : runAgentTurn({
+        messages,
+        modelRef,
+        mode,
+        cwd: WS_ROOT,
+        extraTools,
+        disabledTools: body.disabledTools,
+        orchestrate: body.orchestrate,
+        // Enable the y/n/always approval gate only when the client can answer prompts.
+        approval: body.approvals ? { waitForDecision: (id) => waitForDecision(id) } : undefined,
+        system: ctx.system || undefined,
+        onFallback,
+        onFinishTurn,
+      });
 
   return createUIMessageStreamResponse({ stream });
 });
