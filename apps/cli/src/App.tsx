@@ -14,7 +14,9 @@ import {
   getMemory,
   getSkills,
   getUsage,
+  respondPermission,
   type CheckpointRow,
+  type PermissionRequest,
 } from "./api.js";
 
 const MODES: Mode[] = ["default", "auto", "plan", "edit"];
@@ -48,6 +50,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
   const [sessionId, setSessionId] = useState<string | undefined>();
   const abortRef = useRef<AbortController | null>(null);
   const [checkpoints, setCheckpoints] = useState<CheckpointRow[]>([]);
+  const [pendingPerm, setPendingPerm] = useState<PermissionRequest | null>(null);
   const [model, setModel] = useState<string>(() => {
     try {
       return defaultModelRef();
@@ -66,7 +69,21 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
 
   const sys = (text: string) => setLines((l) => [...l, { role: "system", text }]);
 
-  useInput((_input, key) => {
+  async function answerPerm(decision: "allow" | "deny" | "always") {
+    if (!pendingPerm) return;
+    await respondPermission(base, pendingPerm.id, decision);
+    sys(`🔒 ${decision === "deny" ? "denied" : decision === "always" ? "always allowed" : "allowed"} ${pendingPerm.tool}`);
+    setPendingPerm(null);
+  }
+
+  useInput((input, key) => {
+    // While a permission prompt is up, y/a/n (or Enter=allow, Esc=deny) answer it.
+    if (pendingPerm) {
+      if (input === "y" || key.return) void answerPerm("allow");
+      else if (input === "a") void answerPerm("always");
+      else if (input === "n" || key.escape) void answerPerm("deny");
+      return;
+    }
     if (key.escape && busy) {
       abortRef.current?.abort();
       sys("⎋ interrupted");
@@ -189,6 +206,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
           model: model.startsWith("(") ? undefined : model,
           mode,
           orchestrate: crew,
+          approvals: true,
         },
         {
           onTextDelta: (delta) =>
@@ -204,6 +222,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
             }),
           onFallback: (from, to) => sys(`⇄ fallback: ${from} → ${to}`),
           onOrchestration: (s) => sys(`⚡ ${s.stage} ${s.model} — ${s.detail} · ${(s.ms / 1000).toFixed(1)}s`),
+          onPermission: (req) => setPendingPerm(req),
           onCompaction: () => sys("⟳ history auto-compacted to fit the context window"),
           onError: (m) => sys(`✖ ${m}`),
         },
@@ -249,10 +268,25 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         </Box>
       ))}
 
-      <Box borderStyle="round" borderColor={mode === "auto" ? "yellow" : "gray"} paddingX={1}>
-        <Text color="magentaBright">❯ </Text>
-        <TextInput value={input} onChange={setInput} onSubmit={(v) => submit(v)} placeholder="Message… (/help)" />
-      </Box>
+      {pendingPerm ? (
+        <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+          <Text color="yellow">
+            🔒 Allow <Text bold>{pendingPerm.tool}</Text>
+            {(() => {
+              const inp = pendingPerm.input as { command?: string; path?: string };
+              const d = inp?.command ?? inp?.path;
+              return d ? <Text dimColor> {d}</Text> : null;
+            })()}
+            ?
+          </Text>
+          <Text dimColor>[y]es · [a]lways · [n]o (Enter=yes, Esc=no)</Text>
+        </Box>
+      ) : (
+        <Box borderStyle="round" borderColor={mode === "auto" ? "yellow" : "gray"} paddingX={1}>
+          <Text color="magentaBright">❯ </Text>
+          <TextInput value={input} onChange={setInput} onSubmit={(v) => submit(v)} placeholder="Message… (/help)" />
+        </Box>
+      )}
 
       <Box gap={2}>
         <Text dimColor>{model}</Text>

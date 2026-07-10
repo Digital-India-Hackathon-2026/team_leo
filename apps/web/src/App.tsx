@@ -77,11 +77,26 @@ export default function App() {
   const [wsTab, setWsTab] = useState<WsTab>("files");
   const [preview, setPreview] = useState<{ path: string; content: string } | null>(null);
   const [crew, setCrew] = useState(false);
+  // Answered tool-permission requests: id → the decision taken (hides the buttons).
+  const [answered, setAnswered] = useState<Record<string, string>>({});
+
+  async function decide(id: string, decision: "allow" | "deny" | "always") {
+    setAnswered((a) => ({ ...a, [id]: decision }));
+    await fetch("/api/permission", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, decision }),
+    }).catch(() => {});
+  }
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const transport = useMemo(
-    () => new DefaultChatTransport({ api: "/api/chat", body: () => ({ sessionId, model, mode, orchestrate: crew }) }),
+    () =>
+      new DefaultChatTransport({
+        api: "/api/chat",
+        body: () => ({ sessionId, model, mode, orchestrate: crew, approvals: true }),
+      }),
     [sessionId, model, mode, crew]
   );
   const { messages, sendMessage, status, setMessages } = useChat({ transport });
@@ -219,6 +234,40 @@ export default function App() {
                         return (
                           <div key={i} className="chip crew">
                             ⚡ {d?.stage} · {shortModel(d?.model)}
+                          </div>
+                        );
+                      }
+                      if (part.type === "data-permission-request") {
+                        const d = (part as { data?: { id?: string; tool?: string; input?: unknown } }).data;
+                        const id = d?.id ?? "";
+                        const chosen = answered[id];
+                        const summary =
+                          (d?.input as { command?: string; path?: string })?.command ??
+                          (d?.input as { path?: string })?.path ??
+                          "";
+                        return (
+                          <div key={i} className="perm">
+                            <div className="perm-head">
+                              🔒 Allow <b>{d?.tool}</b>
+                              {summary ? <code>{summary}</code> : null}?
+                            </div>
+                            {chosen ? (
+                              <div className="perm-done">
+                                {chosen === "deny" ? "✗ denied" : chosen === "always" ? "✓ always allowed" : "✓ allowed"}
+                              </div>
+                            ) : (
+                              <div className="perm-actions">
+                                <button className="perm-btn allow" onClick={() => decide(id, "allow")}>
+                                  Allow
+                                </button>
+                                <button className="perm-btn always" onClick={() => decide(id, "always")}>
+                                  Always
+                                </button>
+                                <button className="perm-btn deny" onClick={() => decide(id, "deny")}>
+                                  Deny
+                                </button>
+                              </div>
+                            )}
                           </div>
                         );
                       }

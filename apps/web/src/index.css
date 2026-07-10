@@ -152,6 +152,38 @@ button { cursor: pointer; }
 .chip { display: inline-block; font-size: 12.5px; padding: 3px 8px; border-radius: 7px; margin: 4px 6px 4px 0; }
 .chip.fallback { color: var(--accent2); background: color-mix(in srgb, var(--accent2) 12%, transparent); }
 .chip.crew { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+/* tool permission prompt */
+.perm {
+  margin: 6px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  font-size: 13px;
+}
+.perm-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.perm-head code {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--panel2);
+}
+.perm-actions { display: flex; gap: 8px; margin-top: 9px; }
+.perm-btn {
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.perm-btn.allow:hover { border-color: var(--ok, #3fb950); color: var(--ok, #3fb950); }
+.perm-btn.always:hover { border-color: var(--accent); color: var(--accent); }
+.perm-btn.deny:hover { border-color: var(--warn); color: var(--warn); }
+.perm-done { margin-top: 6px; color: var(--dim); font-size: 12.5px; }
 .chip.tool { color: var(--dim); font-family: ui-monospace, "SF Mono", monospace; background: var(--panel2); }
 .cursor { display: inline-block; width: 8px; height: 16px; background: var(--accent2); border-radius: 2px; animation: blink 1s steps(2) infinite; vertical-align: middle; }
 @keyframes blink { 50% { opacity: 0; } }

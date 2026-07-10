@@ -41,11 +41,17 @@ export interface OrchestrationStage {
   ms: number;
   detail: string;
 }
+export interface PermissionRequest {
+  id: string;
+  tool: string;
+  input: unknown;
+}
 export interface ChatHandlers {
   onTextDelta: (delta: string) => void;
   onFallback?: (from: string, to: string) => void;
   onCompaction?: (info: { keptRecent?: number }) => void;
   onOrchestration?: (stage: OrchestrationStage) => void;
+  onPermission?: (req: PermissionRequest) => void;
   onError?: (message: string) => void;
 }
 
@@ -59,6 +65,7 @@ export async function streamChat(
     mode?: Mode;
     disabledTools?: string[];
     orchestrate?: boolean;
+    approvals?: boolean;
   },
   handlers: ChatHandlers,
   signal?: AbortSignal
@@ -117,6 +124,9 @@ function dispatch(chunk: Record<string, unknown>, h: ChatHandlers): void {
     case "data-orchestration":
       if (chunk.data) h.onOrchestration?.(chunk.data as OrchestrationStage);
       break;
+    case "data-permission-request":
+      if (chunk.data) h.onPermission?.(chunk.data as PermissionRequest);
+      break;
     case "error":
       h.onError?.(String(chunk.errorText ?? "unknown error"));
       break;
@@ -142,6 +152,18 @@ export async function getCheckpoints(base = DEFAULT_BASE): Promise<CheckpointRow
   const res = await fetch(`${base}/api/checkpoints`);
   return ((await res.json()) as { checkpoints: CheckpointRow[] }).checkpoints;
 }
+export async function respondPermission(
+  base: string,
+  id: string,
+  decision: "allow" | "deny" | "always"
+): Promise<void> {
+  await fetch(`${base}/api/permission`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, decision }),
+  }).catch(() => {});
+}
+
 export async function restoreCheckpoint(base: string, hash: string): Promise<boolean> {
   const res = await fetch(`${base}/api/checkpoints/restore`, {
     method: "POST",
