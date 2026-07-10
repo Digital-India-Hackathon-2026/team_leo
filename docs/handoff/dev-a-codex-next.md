@@ -5,83 +5,73 @@ Hand this to Codex. It works **only** in `packages/core`, `packages/contracts`,
 `packages/channels`+`docs`, so no merge conflicts). Branch `core` → PR to `main`.
 
 ## Where the project is (2026-07-11)
-- All branches integrated into `main`: core + channels + web. Dev B shipped a full web
-  app; Dev C shipped all channel adapters + cookbook + 8 provider docs.
-- **Done on core:** providers+fallback+handoff, tools, modes, MCP, memory/PERSONA.md,
-  skills, checkpoints, auto-compaction, slash commands, permission prompts, **Model Crew**
-  (#21 scout pipeline), and **PAV Loop (#10)** — Plan→Apply→Verify (`agent/pav.ts`,
-  `agent/verify.ts`, shared `agent/turn.ts::pumpTurn`; `ChatRequest.pav` + `data-pav`).
-- Lockfile repaired (Dev B's react-markdown/remark-gfm were missing from main's lockfile).
+- All branches integrated into `main`: core + channels + web.
+- **DONE on core** (all built, verified, security-reviewed, committed `493c0db`):
+  providers+fallback+handoff, tools, modes, MCP, memory/PERSONA.md, skills, checkpoints,
+  auto-compaction, slash commands, permission prompts, **Model Crew (#21)**, **PAV Loop (#10)**
+  with **reviewer gate (#21)**, **Notes/Tasks (#25)** endpoints + store, **Agent Hub (#16)**
+  (channels mounted, per-conversation sessions, `node-cron` scheduled agents), **Cookbook (#24)**
+  endpoint, **Setup Scout (#15)**, **Superagent builder (#16)**, **Hooks (#20)**, and a
+  **security pass** (`security/paths.ts` traversal/symlink guard on file tools, `web_fetch`
+  SSRF guard, log redaction).
+- **DONE:** `pcode --web` launches the local web app in the browser (starts the server if
+  needed); `pcode --help`.
 
 ## Build gotchas (do NOT rediscover — from CLAUDE.md)
 - **Server & CLI run from source via tsx but consume `@personacode/core`/`contracts` from
-  their `dist`.** After editing core/contracts you MUST
-  `pnpm --filter @personacode/core build` (and `…/contracts build`) or the server won't see it.
-- AI SDK is **v7**. System-role messages inside `messages` throw `InvalidPromptError` — put
-  system text in the `system` option (see how `pumpTurn` / handoff briefs do it).
-- `.env` is at repo root; the server/CLI walk ancestors to find it. Test fallbacks with e.g.
-  `GOOGLE_...=bad pnpm dev`.
-- Verify every change in **mock mode** (`PERSONACODE_MOCK=1`, `pnpm dev:mock`) — no keys.
-  Use a throwaway `PERSONACODE_WORKSPACE=<tmp>` for anything that writes files. The user runs
-  a server on :3789 — pick another port (`PERSONACODE_PORT=39xx`) for tests; don't disturb it.
-- Never ship the strings "Claude Code"/"Hermes"/"opencode"/"Freebuff"/"Codebuff". Contracts is
-  the frozen source of truth — only Dev A edits it; keep it backward-compatible for B & C.
+  their `dist`.** After editing core/contracts you MUST `pnpm --filter @personacode/core build`.
+- AI SDK **v7**: system-role messages inside `messages` throw — put system text in the `system`
+  option (see `pumpTurn` / handoff briefs).
+- Verify everything in **mock mode** (`PERSONACODE_MOCK=1`, `pnpm dev:mock`) — no keys. Use a
+  throwaway `PERSONACODE_WORKSPACE=<tmp>` for file-writing tests; the user runs :3789, so use
+  another `PERSONACODE_PORT=39xx`.
+- Never ship "Claude Code"/"Hermes"/"opencode"/"Freebuff"/"Codebuff". Contracts is frozen —
+  keep it backward-compatible for B & C.
 
 ---
 
-## Priority 1 — Unblock Dev B: Notes & Tasks endpoints 🔴 (small, do first)
-Dev B's `NotesPage`/`TasksPage` already call these; the server never implemented them.
-- Add a JSON file store (mirror `packages/core/src/storage/sessions.ts`) for notes & tasks
-  under `.personacode/data/` (git-ignored).
-- Server endpoints (shapes from `NoteSchema`/`TaskSchema` in contracts — already defined):
-  - `GET /api/notes` · `POST /api/notes` · `PUT/PATCH /api/notes/:id` · `DELETE /api/notes/:id`
-  - `GET /api/tasks` · `POST /api/tasks` · `PATCH /api/tasks/:id` (toggle `done`) · `DELETE /api/tasks/:id`
-- **Acceptance:** with `pnpm dev:mock`, Dev B's Notes/Tasks pages create/list/toggle/delete
-  and survive a server restart. Update the REST contract doc block at the top of contracts.
+## Remaining opportunities (we have time — ordered by value)
 
-## Priority 2 — Mount channels in the server: the "Agent Hub" 🔴 (demo-critical)
-Right now `apps/server` does NOT import `@personacode/channels`, so Telegram/Discord/Email
-bots only echo in the standalone harness — they never reach the real agent. Wire them:
-- Add `"@personacode/channels": "workspace:*"` to `apps/server/package.json`, `pnpm install`.
-- On boot, import `allAdapters`, `start()` every adapter with `available === true`, and for
-  each inbound `ChannelMessage`: map it to (or create) a session, run `runAgentTurn(...)`
-  (collect the streamed text), then `adapter.send(conversationId, replyText)`.
-- Keep it **fail-soft**: one adapter failing to start must never crash the server (Dev C's
-  adapters already try/catch; wrap the hub loop too). Gate behind an env flag if you want
-  (`PERSONACODE_CHANNELS=1`) so `pnpm dev` stays quiet without bot tokens.
-- **Acceptance:** with a Telegram token in `.env`, message the bot → get a real LLM reply.
-  Matches the demo beat "Telegram message to the agent".
+### A. Auto-mode router (#5) 🔴 — plan feature, currently missing
+Auto mode exists as a *permission* mode but does NOT classify the task and pick a model.
+- Add a cheap classifier: one fast call (`modelForRole("router")`) → `{ kind: code|chat|research|
+  long-context, model, mode }`. Wire into `runAgentTurn` when `mode === "auto"` (or a `route` flag):
+  pick the model + preset before the brain turn; emit it as a `data-orchestration`/route stage.
+- **Acceptance (mock):** in Auto mode, a "research X" prompt routes to a big-context model, a
+  "fix this bug" prompt routes to a coding model — visible in the stream. Matches the demo beat
+  "Auto mode picks model".
 
-## Priority 3 — `GET /api/cookbook` (wire Dev C's hardware detect) 🟠
-- Import `getCookbookRecommendations` from `@personacode/channels`; expose it at
-  `GET /api/cookbook` → `{ hardware, recommendations }`. Dev B adds a "Detect my hardware"
-  button on the Cookbook page against it. If Dev C owes a `catalog.json`, review/supply it.
+### B. `web_search` tool (#2) 🔴 — plan feature, currently missing
+Only `web_fetch` exists. Add a **keyless** `web_search` builtin:
+- Primary: `duck-duck-scrape` (npm, no key). Optional research-grade: Gemini Google-Search
+  grounding on the existing Google key. Return top results (title/url/snippet), Token-Diet trimmed.
+- Add to `buildTools` under the same per-mode policy (allowed in plan/default/auto). Update
+  `BUILTIN_TOOL_NAMES` + contracts tool docs.
 
-## Priority 4 — Reviewer-role gate (#21) on PAV + Model Crew 🟠
-The `reviewer` role already exists (`providers/roles.ts`, prefers a different provider than
-the brain). Use it: after a PAV Apply (or a Crew turn), run a quick reviewer pass that
-critiques the diff/result; on PAV, feed a failing review into the next Apply iteration just
-like a failed verify. Emit it as a `review` orchestration/PAV stage. Keep it opt-in/additive.
+### C. Deep Research preset (#28) 🟠 — now trivial with Superagents
+Ship a bundled `AgentDefinition` (iterative search → fetch → notes → synthesis → cited markdown
+report) as a starter agent in `.personacode/agents/` (or a seed). Uses `web_search` (B) +
+Cerebras/Gemini big budgets. Great standalone demo.
 
-## Priority 5 — Hooks (#20) 🟠 (cheap, high CLI-parity value)
-`.personacode/hooks.json`: pre/post tool-call shell hooks (format-on-edit, block dangerous
-commands, notify-on-finish). One interceptor in the tool executor (`packages/core/src/tools/
-index.ts`) — run matching `preToolUse` hooks before a tool (a non-zero exit blocks it),
-`postToolUse` after (e.g. `prettier --write $FILE`), `onFinish` at turn end. Add `/hooks` to
-the CLI to list them.
+### D. Bharat Mode (#30, Digital-India theme) 🟠 — see implementationplan.md
+Core slice: add an optional `language` to `ChatRequest` (+ session), inject a "respond in
+<language>" instruction into the system prompt, and default memory/PERSONA prompts to honor it.
+CLI `/lang <code>`; web gets a picker (Dev B). Optional voice is Dev B (Web Speech API). Lean on
+the existing offline (Ollama) + privacy-first story as the "digital sovereignty" pillar.
 
-## Priority 6 — Setup Scout (#15) & Superagent builder (#16) 🟡
-- **Setup Scout:** scan the repo (langs/frameworks/package.json) → recommend MCP servers,
-  skills, and a PERSONA.md template → one-click apply. Reuse `agent/scout.ts`'s repo walk.
-- **Superagent builder:** from one natural-language prompt, generate an `AgentDefinition`
-  (`AgentDefinitionSchema` already in contracts) → save to `.personacode/agents/*.json`.
-  Add `/agent new "<prompt>"` in the CLI and a `POST /api/agents` endpoint.
+### E. ACP adapter (#29) 🟡 — editor integration
+Thin `apps/acp` using `@agentclientprotocol/sdk`: implement the agent side (`initialize`,
+`newSession`, `prompt` → forward to the core session API, stream `sessionUpdate`s). Makes
+Personacode usable inside Zed. ~Half a day.
+
+### F. Real Terse Mode (#9) 🟢 — optional, makes the claim fully true
+A toggle/flag that swaps in a compact system prompt + an "answer concisely" instruction. Today
+only the minimal base prompt + terse sub-agent prompts exist (no reply-compression toggle).
 
 ## Also
-- **Web PAV pipeline card is Dev B's task** (documented in `docs/handoff/dev-b-web-tasks.md`);
-  don't touch `apps/web`.
-- Day-3 security pass (from the plan): path-traversal on all file endpoints, secrets never in
-  logs/responses, tool policy per mode. Then the demo script rehearsal.
+- Web UI for the new backends (Superagent builder, Setup Scout, Cookbook hardware, PAV card) is
+  **Dev B's task** — see `docs/handoff/dev-b-web-tasks.md`. Don't touch `apps/web`.
+- Remaining Day-3: demo-script rehearsal, `pnpm audit`, and channels real-credential e2e (Dev C).
 
-**Suggested order for Codex:** P1 (fast unblock) → P2 (demo-critical) → P3 → P5 (cheap) →
-P4 → P6. Verify each in mock before pushing; `pnpm build` + `pnpm typecheck` green.
+**Suggested order:** A (auto router) → B (web_search) → C (deep research) → D (Bharat Mode) →
+E (ACP) → F. Verify each in mock; `pnpm build` + `pnpm typecheck` green before pushing.
