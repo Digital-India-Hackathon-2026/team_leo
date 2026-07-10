@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { config as dotenvConfig } from "dotenv";
 import { render } from "ink";
 import App from "./App.js";
+import { ensureServer } from "./server.js";
 
 // Load .env from the nearest ancestor that has one, so keys are found no matter
 // which directory `personacode`/`pnpm cli` is launched from (dotenv's default
@@ -13,14 +14,55 @@ import App from "./App.js";
   for (let i = 0; i < 8; i++) {
     const candidate = join(dir, ".env");
     if (existsSync(candidate)) {
-      dotenvConfig({ path: candidate });
+      dotenvConfig({ path: candidate, quiet: true });
       return;
     }
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  dotenvConfig();
+  dotenvConfig({ quiet: true });
 })();
 
-render(<App />);
+// Run in the terminal's alternate screen buffer (like opencode / vim / less):
+// the CLI gets a clean fullscreen surface, and on exit the user's previous
+// scrollback is restored intact — not wiped, just tucked back.
+const ALT_ENTER = "\x1b[?1049h";
+const ALT_LEAVE = "\x1b[?1049l";
+const SHOW_CURSOR = "\x1b[?25h";
+let restored = false;
+function restoreScreen() {
+  if (restored) return;
+  restored = true;
+  process.stdout.write(ALT_LEAVE + SHOW_CURSOR);
+}
+
+// Route chat through the server so the CLI inherits PERSONA.md/memory, MCP tools,
+// checkpoints, and auto-compaction. Reuse a running server or spawn one; fail-soft.
+const srv = await ensureServer();
+if (srv.error) {
+  console.error(
+    `⚠ ${srv.error}\n  Start it in another terminal with \`pnpm dev\` (or \`pnpm dev:mock\`), then run \`pcode\` again.`
+  );
+  process.exit(1);
+}
+
+process.stdout.write(ALT_ENTER);
+const { waitUntilExit } = render(<App base={srv.base} mock={srv.mock} />);
+
+function shutdown() {
+  restoreScreen();
+  if (srv.started) srv.child?.kill(); // only kill a server we spawned
+}
+
+// Safety nets so the main screen is always restored, however we leave.
+process.on("exit", shutdown);
+process.on("SIGINT", () => process.exit(0));
+process.on("SIGTERM", () => process.exit(0));
+
+waitUntilExit().then(() => {
+  shutdown();
+  // Back on the user's normal shell prompt now — leave a short hint like Claude Code.
+  console.log("Personacode session ended — run `pcode` to start again.");
+  process.exit(0);
+});
