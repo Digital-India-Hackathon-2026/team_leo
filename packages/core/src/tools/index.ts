@@ -1,4 +1,5 @@
 import { tool } from "ai";
+import { createTransport } from "nodemailer";
 import type { ToolSet } from "ai";
 import { z } from "zod";
 import { exec } from "node:child_process";
@@ -151,6 +152,17 @@ function allowed(policy: ToolPolicy, toolName: string): boolean {
   return true;
 }
 
+async function smtpSend(to: string, subject: string, body: string): Promise<string> {
+  const user = process.env.EMAIL_USER;
+  const pass = process.env.EMAIL_APP_PASSWORD;
+  const host = process.env.EMAIL_SMTP_HOST ?? "smtp.gmail.com";
+  if (!user || !pass) throw new Error("EMAIL_USER and EMAIL_APP_PASSWORD not set in .env");
+  const transport = createTransport({ host, port: 587, secure: false, auth: { user, pass } });
+  await transport.sendMail({ from: user, to, subject, text: body });
+  transport.close();
+  return `Email sent to ${to} with subject "${subject}"`;
+}
+
 async function executeTool<T>(
   policy: ToolPolicy,
   name: string,
@@ -248,8 +260,23 @@ export function buildTools(policy: ToolPolicy): ToolSet {
           return diet(stripped);
         }),
     }),
+
+    send_email: tool({
+      description:
+        "Send an email via SMTP. Uses the EMAIL_USER/EMAIL_APP_PASSWORD credentials from .env. " +
+        "Use when the user asks to send, compose, or email someone.",
+      inputSchema: z.object({
+        to: z.string().describe("Recipient email address"),
+        subject: z.string().describe("Email subject line"),
+        body: z.string().describe("Plain-text email body"),
+      }),
+      execute: ({ to, subject, body }) =>
+        executeTool(policy, "send_email", { to, subject, body }, () =>
+          smtpSend(to, subject, body)
+        ),
+    }),
   };
 }
 
 export type BuiltinToolName = keyof ReturnType<typeof buildTools>;
-export const BUILTIN_TOOL_NAMES = ["bash", "read_file", "write_file", "list_files", "web_fetch"] as const;
+export const BUILTIN_TOOL_NAMES = ["bash", "read_file", "write_file", "list_files", "web_fetch", "send_email"] as const;
