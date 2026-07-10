@@ -1,0 +1,26 @@
+{
+  "name": "@personacode/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/providers/providers.json','dist/providers/providers.json')\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^4.0.10",
+    "@ai-sdk/groq": "^4.0.6",
+    "@ai-sdk/openai-compatible": "^3.0.6",
+    "@ai-sdk/provider": "^4.0.2",
+    "@personacode/contracts": "workspace:*",
+    "ai": "^7.0.18",
+    "zod": "^4.4.3"
+  }
+}

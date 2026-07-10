@@ -1,0 +1,26 @@
+{
+  "name": "@personacode/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "personacode": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "tsx src/index.tsx",
+    "start:mock": "cross-env PERSONACODE_MOCK=1 tsx src/index.tsx"
+  },
+  "dependencies": {
+    "@personacode/contracts": "workspace:*",
+    "@personacode/core": "workspace:*",
+    "ai": "^7.0.18",
+    "dotenv": "^17.4.2",
+    "ink": "^7.1.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17"
+  }
+}

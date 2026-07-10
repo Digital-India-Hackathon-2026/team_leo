@@ -1,0 +1,21 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+# Runtime dirs live wherever the CLI/server is launched — ignore at any depth
+**/.personacode/data/
+**/.personacode/checkpoints/
+*.log
+.DS_Store
+Thumbs.db
+coverage/
+.turbo/
+docs/API.md
+
+# Local tooling artifacts (per-developer, regenerable — not shared)
+.claude/settings.local.json
+.playwright-mcp/
+.understand-anything/

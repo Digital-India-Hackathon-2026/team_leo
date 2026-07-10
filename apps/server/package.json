@@ -1,0 +1,20 @@
+{
+  "name": "@personacode/server",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/index.ts",
+    "dev:mock": "cross-env PERSONACODE_MOCK=1 tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.8",
+    "@personacode/contracts": "workspace:*",
+    "@personacode/core": "workspace:*",
+    "ai": "^7.0.18",
+    "dotenv": "^17.4.2",
+    "hono": "^4.12.28"
+  }
+}

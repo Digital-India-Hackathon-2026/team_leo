@@ -1,0 +1,103 @@
+{
+  "providers": [
+    {
+      "id": "google",
+      "name": "Google AI Studio (Gemini)",
+      "badge": "free",
+      "keyUrl": "https://aistudio.google.com/apikey",
+      "envVar": "GOOGLE_GENERATIVE_AI_API_KEY",
+      "defaultModel": "gemini-2.5-flash",
+      "models": ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"],
+      "quotaNote": "Free: ~10-60 RPM depending on model, 1M-token context, no card. Best default brain.",
+      "contextWindows": { "gemini-2.5-flash": 1048576, "gemini-2.5-flash-lite": 1048576, "gemini-2.5-pro": 1048576 }
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "badge": "free",
+      "keyUrl": "https://console.groq.com/keys",
+      "envVar": "GROQ_API_KEY",
+      "defaultModel": "llama-3.3-70b-versatile",
+      "models": ["llama-3.3-70b-versatile", "qwen/qwen3-32b", "llama-3.1-8b-instant"],
+      "quotaNote": "Free: ~30 RPM / daily token caps, no card. Fastest inference — used for quick calls & Auto-mode routing.",
+      "contextWindows": { "llama-3.3-70b-versatile": 131072, "qwen/qwen3-32b": 131072, "llama-3.1-8b-instant": 131072 }
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "badge": "free",
+      "keyUrl": "https://cloud.cerebras.ai/",
+      "envVar": "CEREBRAS_API_KEY",
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "defaultModel": "llama-3.3-70b",
+      "models": ["llama-3.3-70b", "qwen-3-32b"],
+      "quotaNote": "Free: ~1M tokens/day, no card. Big free budget — used for Deep Research and bulk work.",
+      "contextWindows": { "llama-3.3-70b": 65536, "qwen-3-32b": 65536 }
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter (:free models)",
+      "badge": "freemium",
+      "keyUrl": "https://openrouter.ai/keys",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "envVar": "OPENROUTER_API_KEY",
+      "defaultModel": "meta-llama/llama-3.3-70b-instruct:free",
+      "models": [
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "deepseek/deepseek-r1:free",
+        "qwen/qwen3-coder:free",
+        "google/gemma-3-27b-it:free"
+      ],
+      "quotaNote": "Free: 20 RPM, 50 req/day (1000/day if you ever bought $10 credits). 27+ rotating :free models.",
+      "contextWindows": { "meta-llama/llama-3.3-70b-instruct:free": 131072, "deepseek/deepseek-r1:free": 163840, "qwen/qwen3-coder:free": 262144, "google/gemma-3-27b-it:free": 96000 }
+    },
+    {
+      "id": "nvidia",
+      "name": "NVIDIA NIM",
+      "badge": "free",
+      "keyUrl": "https://build.nvidia.com/",
+      "baseUrl": "https://integrate.api.nvidia.com/v1",
+      "envVar": "NVIDIA_API_KEY",
+      "defaultModel": "meta/llama-3.3-70b-instruct",
+      "models": ["meta/llama-3.3-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"],
+      "quotaNote": "Free API credits on signup, no card. Solid backup tier.",
+      "contextWindows": { "meta/llama-3.3-70b-instruct": 131072, "nvidia/llama-3.1-nemotron-70b-instruct": 131072 }
+    },
+    {
+      "id": "github",
+      "name": "GitHub Models",
+      "badge": "free",
+      "keyUrl": "https://github.com/settings/tokens",
+      "baseUrl": "https://models.github.ai/inference",
+      "envVar": "GITHUB_MODELS_TOKEN",
+      "defaultModel": "openai/gpt-4o-mini",
+      "models": ["openai/gpt-4o-mini", "meta/llama-3.3-70b-instruct"],
+      "quotaNote": "Free with any GitHub account (rate-limited per day). Fine-grained PAT works.",
+      "contextWindows": { "openai/gpt-4o-mini": 128000, "meta/llama-3.3-70b-instruct": 131072 }
+    },
+    {
+      "id": "zen",
+      "name": "OpenCode Zen",
+      "badge": "freemium",
+      "keyUrl": "https://opencode.ai/zen",
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "envVar": "OPENCODE_ZEN_API_KEY",
+      "defaultModel": "grok-code",
+      "models": ["grok-code"],
+      "quotaNote": "Rotating launch-window $0 models (roster changes weekly; prompts may train models while free).",
+      "contextWindows": { "grok-code": 262144 }
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama (local)",
+      "badge": "local",
+      "keyUrl": "https://ollama.com/download",
+      "baseUrl": "http://localhost:11434/v1",
+      "envVar": "OLLAMA_BASE_URL",
+      "defaultModel": "qwen3:4b",
+      "models": ["qwen3:4b", "llama3.2:3b"],
+      "quotaNote": "Unlimited & offline. Final fallback that never dies; powers Cookbook.",
+      "contextWindows": { "qwen3:4b": 32768, "llama3.2:3b": 131072 }
+    }
+  ]
+}
