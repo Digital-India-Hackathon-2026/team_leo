@@ -1,10 +1,10 @@
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Checkpoints = a *shadow* git repository under `.personacode/checkpoints/shadow.git`
@@ -48,9 +48,11 @@ export class CheckpointStore {
   }
 
   private async git(args: string[]): Promise<string> {
-    // Build one command string; quote args that may contain spaces (paths).
-    const quoted = args.map((a) => (/[\s]/.test(a) ? `"${a}"` : a)).join(" ");
-    const { stdout } = await execAsync(`git ${quoted}`, { cwd: this.cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: this.cwd,
+      windowsHide: true,
+      maxBuffer: 32 * 1024 * 1024,
+    });
     return stdout.trim();
   }
 
@@ -95,6 +97,9 @@ export class CheckpointStore {
    * info/exclude list, so node_modules / dist / .git are never touched.
    */
   async restore(hash: string): Promise<void> {
+    if (!/^[a-f0-9]{40}$/i.test(hash)) throw new Error("invalid checkpoint hash");
+    const checkpoints = await this.list();
+    if (!checkpoints.some((checkpoint) => checkpoint.hash === hash)) throw new Error("unknown checkpoint");
     await this.git([...this.base(), ...IDENT, "reset", "--hard", hash]);
     await this.git([...this.base(), "clean", "-fd"]);
   }

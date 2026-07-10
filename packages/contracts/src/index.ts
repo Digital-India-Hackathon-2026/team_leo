@@ -14,14 +14,21 @@
  *   POST /api/sessions                   → SessionMeta           (body: CreateSessionRequest)
  *   GET  /api/sessions/:id               → Session
  *   DELETE /api/sessions/:id             → { ok: true }
- *   POST /api/chat                       → UIMessage SSE stream  (body: ChatRequest; AI SDK v5 useChat-compatible)
+ *   POST /api/chat                       → UIMessage SSE stream  (body: ChatRequest; AI SDK v7 useChat-compatible)
  *                                          data chunks: data-fallback, data-compaction, data-orchestration (Model Crew),
  *                                          data-pav (PAV loop, see PavStage), data-permission-request (approvals)
  *   GET  /api/sessions/:id/usage        → UsageReport
  *   POST /api/compare                    → CompareResponse       (body: CompareRequest)
  *   POST /api/share/:id                  → { url: string }       (freeze session snapshot)
  *   GET  /s/:id                          → shared session page (HTML)
- *   GET/POST/DELETE /api/notes, /api/tasks → Note[] / Task[] CRUD
+ *   GET/POST /api/notes                 → Note[] / Note
+ *   PUT/PATCH/DELETE /api/notes/:id     → Note / { ok: true }
+ *   GET/POST /api/tasks                 → Task[] / Task
+ *   PATCH/DELETE /api/tasks/:id         → Task / { ok: true }
+ *   GET  /api/cookbook                  → CookbookResult
+ *   GET  /api/hooks                     → HookConfig
+ *   GET/POST /api/setup-scout           → SetupScoutResponse
+ *   GET/POST /api/agents                → CreateAgentResponse[] / CreateAgentResponse
  */
 import { z } from "zod";
 
@@ -93,7 +100,7 @@ export type OrchestrationStage = z.infer<typeof OrchestrationStageSchema>;
  * one or more apply/verify iterations, then done (passed = whether checks went green).
  */
 export const PavStageSchema = z.object({
-  phase: z.enum(["plan", "apply", "verify", "done"]),
+  phase: z.enum(["plan", "apply", "review", "verify", "done"]),
   detail: z.string(),
   model: z.string().optional(),
   ms: z.number().optional(),
@@ -147,7 +154,7 @@ export const SessionMetaSchema = z.object({
 export type SessionMeta = z.infer<typeof SessionMetaSchema>;
 
 /**
- * Messages are AI SDK v5 UIMessage objects; we deliberately pass them through
+ * Messages are AI SDK v7 UIMessage objects; we deliberately pass them through
  * untyped here so web can use @ai-sdk/react verbatim.
  */
 export const SessionSchema = SessionMetaSchema.extend({
@@ -166,6 +173,8 @@ export const ChatRequestSchema = z.object({
   sessionId: z.string().optional(),
   messages: z.array(z.unknown()),
   model: z.string().optional(),
+  /** Saved agent definition name from `.personacode/agents/`. */
+  agent: z.string().trim().min(1).max(100).optional(),
   mode: ModeSchema.optional(),
   /** Qualified tool names toggled off for this turn (builtins or MCP mcp__server__tool). */
   disabledTools: z.array(z.string()).optional(),
@@ -218,6 +227,19 @@ export const NoteSchema = z.object({
 });
 export type Note = z.infer<typeof NoteSchema>;
 
+export const CreateNoteRequestSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  body: z.string().max(200_000).default(""),
+  tags: z.array(z.string().trim().min(1).max(50)).max(50).default([]),
+});
+export type CreateNoteRequest = z.infer<typeof CreateNoteRequestSchema>;
+
+export const UpdateNoteRequestSchema = CreateNoteRequestSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  "at least one note field is required",
+);
+export type UpdateNoteRequest = z.infer<typeof UpdateNoteRequestSchema>;
+
 export const TaskSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -229,6 +251,51 @@ export const TaskSchema = z.object({
   agent: z.string().optional(),
 });
 export type Task = z.infer<typeof TaskSchema>;
+
+export const CreateTaskRequestSchema = z.object({
+  title: z.string().trim().min(1).max(500),
+  schedule: z.string().trim().min(1).max(200).optional(),
+  agent: z.string().trim().min(1).max(100).optional(),
+});
+export type CreateTaskRequest = z.infer<typeof CreateTaskRequestSchema>;
+
+export const UpdateTaskRequestSchema = z
+  .object({
+    title: z.string().trim().min(1).max(500).optional(),
+    done: z.boolean().optional(),
+    schedule: z.string().trim().min(1).max(200).nullable().optional(),
+    agent: z.string().trim().min(1).max(100).nullable().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "at least one task field is required");
+export type UpdateTaskRequest = z.infer<typeof UpdateTaskRequestSchema>;
+
+// ---------- Cookbook ----------
+
+export const HardwareInfoSchema = z.object({
+  ram: z.object({ totalGB: z.number(), freeGB: z.number() }),
+  cpu: z.object({ brand: z.string(), cores: z.number(), speedGHz: z.number() }),
+  gpu: z.array(z.object({ model: z.string(), vramMB: z.number() })),
+});
+export type HardwareInfo = z.infer<typeof HardwareInfoSchema>;
+
+export const ModelRecommendationSchema = z.object({
+  name: z.string(),
+  parameterSize: z.string(),
+  quantization: z.string(),
+  minRAM: z.string(),
+  pullCommand: z.string(),
+  notes: z.string(),
+  tier: z.enum(["tiny", "small", "medium", "large"]),
+});
+export type ModelRecommendation = z.infer<typeof ModelRecommendationSchema>;
+
+export const CookbookResultSchema = z.object({
+  hardware: HardwareInfoSchema,
+  recommendations: z.array(ModelRecommendationSchema),
+  installedModels: z.array(z.string()),
+  summary: z.string(),
+});
+export type CookbookResult = z.infer<typeof CookbookResultSchema>;
 
 // ---------- Channels (Dev C implements against these) ----------
 
@@ -270,10 +337,27 @@ export interface ChannelAdapter {
   stop(): Promise<void>;
 }
 
+// ---------- Hooks ----------
+
+export const HookEntrySchema = z.object({
+  /** Built-in tool name, `*`, or a comma-separated list. Omit for onFinish hooks. */
+  matcher: z.string().trim().min(1).optional(),
+  command: z.string().trim().min(1),
+  timeoutMs: z.number().int().min(100).max(120_000).optional(),
+});
+export type HookEntry = z.infer<typeof HookEntrySchema>;
+
+export const HookConfigSchema = z.object({
+  preToolUse: z.array(HookEntrySchema).default([]),
+  postToolUse: z.array(HookEntrySchema).default([]),
+  onFinish: z.array(HookEntrySchema).default([]),
+});
+export type HookConfig = z.infer<typeof HookConfigSchema>;
+
 // ---------- Agent definitions (superagents) ----------
 
 export const AgentDefinitionSchema = z.object({
-  name: z.string(),
+  name: z.string().trim().min(1).max(100),
   description: z.string(),
   systemPrompt: z.string(),
   model: z.string().optional(), // ModelInfo.ref; empty → auto
@@ -286,3 +370,40 @@ export const AgentDefinitionSchema = z.object({
   mode: ModeSchema.default("default"),
 });
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
+
+export const CreateAgentRequestSchema = z.object({
+  prompt: z.string().trim().min(1).max(10_000),
+  model: z.string().trim().min(1).optional(),
+});
+export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
+
+export const CreateAgentResponseSchema = z.object({
+  agent: AgentDefinitionSchema,
+  path: z.string(),
+});
+export type CreateAgentResponse = z.infer<typeof CreateAgentResponseSchema>;
+
+export const SetupScoutRequestSchema = z.object({ apply: z.boolean().default(false) });
+export type SetupScoutRequest = z.infer<typeof SetupScoutRequestSchema>;
+
+export const SetupRecommendationSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  config: z.record(z.string(), z.unknown()).optional(),
+  content: z.string().optional(),
+});
+export const SetupScoutResponseSchema = z.object({
+  detected: z.object({
+    languages: z.array(z.string()),
+    frameworks: z.array(z.string()),
+    packageManager: z.string().optional(),
+    scripts: z.array(z.string()),
+  }),
+  recommendations: z.object({
+    mcpServers: z.array(SetupRecommendationSchema),
+    skills: z.array(SetupRecommendationSchema),
+    personaTemplate: z.string(),
+  }),
+  applied: z.array(z.string()).default([]),
+});
+export type SetupScoutResponse = z.infer<typeof SetupScoutResponseSchema>;

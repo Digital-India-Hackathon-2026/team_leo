@@ -11,10 +11,12 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.0.8",
+    "@personacode/channels": "workspace:*",
     "@personacode/contracts": "workspace:*",
     "@personacode/core": "workspace:*",
     "ai": "^7.0.18",
     "dotenv": "^17.4.2",
-    "hono": "^4.12.28"
+    "hono": "^4.12.28",
+    "node-cron": "^4.2.1"
   }
 }

@@ -13,6 +13,9 @@ import {
   restoreCheckpoint,
   getMemory,
   getSkills,
+  getHooks,
+  createAgent,
+  runSetupScout,
   getUsage,
   respondPermission,
   type CheckpointRow,
@@ -47,6 +50,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
   const [busy, setBusy] = useState(false);
   const [crew, setCrew] = useState(false);
   const [pav, setPav] = useState(false);
+  const [agentName, setAgentName] = useState<string | undefined>();
   const [tokens, setTokens] = useState(0);
   const [sessionId, setSessionId] = useState<string | undefined>();
   const abortRef = useRef<AbortController | null>(null);
@@ -72,9 +76,13 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
 
   async function answerPerm(decision: "allow" | "deny" | "always") {
     if (!pendingPerm) return;
-    await respondPermission(base, pendingPerm.id, decision);
-    sys(`🔒 ${decision === "deny" ? "denied" : decision === "always" ? "always allowed" : "allowed"} ${pendingPerm.tool}`);
-    setPendingPerm(null);
+    try {
+      await respondPermission(base, pendingPerm.id, decision);
+      sys(`🔒 ${decision === "deny" ? "denied" : decision === "always" ? "always allowed" : "allowed"} ${pendingPerm.tool}`);
+      setPendingPerm(null);
+    } catch {
+      sys("permission response failed — retry y/a/n");
+    }
   }
 
   useInput((input, key) => {
@@ -93,7 +101,11 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
   });
 
   async function handleCommand(cmd: string): Promise<void> {
-    const [name, ...args] = cmd.slice(1).split(" ");
+    const command = cmd.slice(1).trim();
+    const separator = command.search(/\s/);
+    const name = separator < 0 ? command : command.slice(0, separator);
+    const rawArgs = separator < 0 ? "" : command.slice(separator).trim();
+    const args = rawArgs ? rawArgs.split(/\s+/) : [];
     switch (name) {
       case "exit":
       case "quit":
@@ -144,6 +156,65 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         }
         return;
       }
+      case "hooks": {
+        try {
+          const result = await getHooks(base);
+          if (result.error) return sys(`hooks: invalid config — ${result.error}`);
+          const rows = [
+            ...result.hooks.preToolUse.map((h) => `  preToolUse [${h.matcher ?? "*"}] ${h.command}`),
+            ...result.hooks.postToolUse.map((h) => `  postToolUse [${h.matcher ?? "*"}] ${h.command}`),
+            ...result.hooks.onFinish.map((h) => `  onFinish ${h.command}`),
+          ];
+          sys(rows.length ? `hooks (${result.path}):` : `hooks: (none — ${result.path})`);
+          rows.forEach(sys);
+        } catch {
+          sys("hooks: (server unreachable)");
+        }
+        return;
+      }
+      case "setup": {
+        try {
+          const apply = args[0] === "apply";
+          const result = await runSetupScout(base, apply);
+          sys(`Setup Scout: ${result.detected.languages.join(", ") || "unknown stack"}${result.detected.frameworks.length ? ` · ${result.detected.frameworks.join(", ")}` : ""}`);
+          sys(`  recommends ${result.recommendations.mcpServers.length} MCP server(s), ${result.recommendations.skills.length} skill(s), and PERSONA.md`);
+          if (apply) sys(result.applied.length ? `  applied: ${result.applied.join(", ")}` : "  nothing applied (files already exist)");
+          else sys("  preview only — use /setup apply to create missing files");
+        } catch (error) {
+          sys(`Setup Scout failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        return;
+      }
+      case "agent": {
+        if (!rawArgs) return sys(`agent: ${agentName ?? "(none)"} · use /agent new, /agent use <name>, or /agent off`);
+        if (rawArgs === "off") {
+          setAgentName(undefined);
+          sys("custom agent off");
+          return;
+        }
+        const useMatch = rawArgs.match(/^use(?:\s+)([\s\S]+)$/);
+        if (useMatch) {
+          const selected = useMatch[1]!.trim().replace(/^(["'])(.*)\1$/, "$2");
+          setAgentName(selected);
+          sys(`custom agent: ${selected}`);
+          return;
+        }
+        const match = rawArgs.match(/^new(?:\s+)([\s\S]+)$/);
+        if (!match) return sys('usage: /agent new "prompt" · /agent use "name" · /agent off');
+        let prompt = match[1]!.trim();
+        if ((prompt.startsWith('"') && prompt.endsWith('"')) || (prompt.startsWith("'") && prompt.endsWith("'"))) {
+          prompt = prompt.slice(1, -1).trim();
+        }
+        if (!prompt) return sys('usage: /agent new "describe the agent"');
+        sys("building agent definition…");
+        try {
+          const result = await createAgent(base, prompt);
+          sys(`agent created: ${result.agent.name} — ${result.agent.description} (${result.path})`);
+        } catch (error) {
+          sys(`agent creation failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        return;
+      }
       case "rewind": {
         try {
           const cps = await getCheckpoints(base);
@@ -183,7 +254,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         return;
       }
       case "help":
-        sys("/init /memory /skills /mcp /rewind [n] /usage /compact /crew [on|off] /pav [on|off] /mode <m> /model <ref> /connect /exit · Shift+Tab cycles modes · Esc interrupts");
+        sys('/init /setup [apply] /agent new "prompt" /memory /skills /mcp /hooks /rewind [n] /usage /compact /crew [on|off] /pav [on|off] /mode <m> /model <ref> /connect /exit · Shift+Tab cycles modes · Esc interrupts');
         return;
       default:
         sys(`Unknown command: /${name}`);
@@ -210,8 +281,9 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         {
           sessionId,
           messages,
-          model: model.startsWith("(") ? undefined : model,
-          mode,
+          model: agentName || model.startsWith("(") ? undefined : model,
+          mode: agentName ? undefined : mode,
+          agent: agentName,
           orchestrate: crew,
           pav,
           approvals: true,
@@ -308,6 +380,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         <Text color={mode === "auto" ? "yellow" : mode === "plan" ? "blue" : "gray"}>{modeInfo.chip}</Text>
         {crew && <Text color="magentaBright">⚡ Crew</Text>}
         {pav && <Text color="greenBright">⚙ PAV</Text>}
+        {agentName && <Text color="cyanBright">agent: {agentName}</Text>}
         <Text dimColor>
           {fmtNum(tokens)}
           {ctxWindow > 0 ? `/${fmtNum(ctxWindow)} · ${ctxPct.toFixed(ctxPct < 10 ? 1 : 0)}%` : " tok"}
