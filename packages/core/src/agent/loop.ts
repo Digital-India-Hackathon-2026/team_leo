@@ -4,6 +4,8 @@ import type { Mode } from "@personacode/contracts";
 import { buildTools } from "../tools/index.js";
 import { compactConversation, shouldCompact } from "./compaction.js";
 import { runScout } from "./scout.js";
+import { runFinishHooks } from "../hooks/index.js";
+import { captureReviewBaseline, reviewAgentResult } from "./reviewer.js";
 import { defaultModelRef, fallbackChain, getModel, setCooldown } from "../providers/registry.js";
 import {
   MODE_HINTS,
@@ -81,11 +83,13 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
       // summarizers brief them in parallel; the brief is injected so the brain starts
       // with context already known. Strictly additive — any failure just skips it.
       let orchestrationBrief = "";
+      let crewActive = false;
       if (opts.orchestrate) {
         try {
           const task = lastUserText(opts.messages);
           const scout = await runScout({ cwd, task });
           if (scout) {
+            crewActive = true;
             for (const st of scout.stages) {
               writer.write({ type: "data-orchestration", data: st } as unknown as UIMessageChunk);
             }
@@ -124,6 +128,7 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
         ...buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []), requestApproval }),
         ...(opts.extraTools ?? {}),
       };
+      const reviewBaseline = crewActive ? await captureReviewBaseline(cwd) : undefined;
 
       const { result, error } = await pumpTurn({
         writer,
@@ -138,7 +143,31 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
         writer.write({ type: "error", errorText: error });
         return;
       }
-      if (result) await opts.onFinishTurn?.(result);
+      if (result) {
+        if (crewActive) {
+          const review = await reviewAgentResult({
+            cwd,
+            task: lastUserText(opts.messages),
+            result: result.text,
+            avoidModel: result.modelRef,
+            baseline: reviewBaseline,
+          });
+          result.usage.inputTokens += review.usage.inputTokens;
+          result.usage.outputTokens += review.usage.outputTokens;
+          result.usage.totalTokens += review.usage.totalTokens;
+          writer.write({
+            type: "data-orchestration",
+            data: {
+              stage: "review",
+              model: review.model,
+              ms: review.ms,
+              detail: `${review.passed ? "passed" : "issues found"}: ${review.critique}`,
+            },
+          } as unknown as UIMessageChunk);
+        }
+        if (mode !== "plan") await runFinishHooks(cwd, { result }).catch(() => undefined);
+        await opts.onFinishTurn?.(result);
+      }
     },
   });
 }

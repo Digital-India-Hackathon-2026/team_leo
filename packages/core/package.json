@@ -22,6 +22,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@personacode/contracts": "workspace:*",
     "ai": "^7.0.18",
+    "node-cron": "^4.2.1",
     "zod": "^4.4.3"
   }
 }

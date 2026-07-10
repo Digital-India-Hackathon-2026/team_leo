@@ -18,6 +18,8 @@ export {
   type AgentTurnResult,
 } from "./agent/loop.js";
 export { SessionStore } from "./storage/sessions.js";
+export { NotesTasksStore, ChannelSessionStore } from "./storage/data.js";
+export { loadHooks, hooksPath, runToolHooks, runFinishHooks, type LoadedHooks } from "./hooks/index.js";
 export {
   buildProjectContext,
   loadPersona,
@@ -65,6 +67,21 @@ export {
   runCommand,
   type VerifyResult,
 } from "./agent/verify.js";
+export {
+  captureReviewBaseline,
+  reviewAgentResult,
+  type ReviewBaseline,
+  type ReviewResult,
+} from "./agent/reviewer.js";
+export {
+  buildAgentDefinition,
+  saveAgentDefinition,
+  listAgentDefinitions,
+  findAgentDefinition,
+  agentsDir,
+} from "./agents/index.js";
+export { runSetupScout } from "./setup/index.js";
+export { resolveWorkspacePath } from "./security/paths.js";
 export {
   modelForRole,
   nextParallelRef,
