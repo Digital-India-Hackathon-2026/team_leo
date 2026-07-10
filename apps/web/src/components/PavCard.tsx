@@ -5,6 +5,7 @@ import MarkdownRenderer from "./MarkdownRenderer";
 function phaseIcon(phase: string, passed?: boolean): string {
   if (phase === "plan") return "📋";
   if (phase === "apply") return "🔨";
+  if (phase === "review") return "🔍";
   if (phase === "verify") return passed ? "✓" : "✗";
   if (phase === "done") return "🏁";
   return "⚙";
@@ -13,6 +14,7 @@ function phaseIcon(phase: string, passed?: boolean): string {
 function phaseLabel(phase: string): string {
   if (phase === "plan") return "Plan";
   if (phase === "apply") return "Apply";
+  if (phase === "review") return "Review";
   if (phase === "verify") return "Verify";
   if (phase === "done") return "Done";
   return phase;
@@ -44,13 +46,13 @@ export default function PavCard({ stages }: { stages: PavStage[] }) {
       <div className="pav-timeline">
         {stages.map((s, i) => {
           const icon = phaseIcon(s.phase, s.passed);
-          const isVerify = s.phase === "verify";
-          const passed = isVerify ? s.passed : undefined;
+          const isCheckPhase = s.phase === "verify" || s.phase === "review";
+          const passed = isCheckPhase ? s.passed : undefined;
 
           return (
-            <div key={i} className={`pav-step ${s.phase} ${isVerify ? (passed ? "pass" : "fail") : ""}`}>
+            <div key={i} className={`pav-step ${s.phase} ${isCheckPhase ? (passed ? "pass" : "fail") : ""}`}>
               <div className="pav-step-dot">
-                <span className={`pav-phase-icon ${isVerify ? (passed ? "pass" : "fail") : ""}`}>
+                <span className={`pav-phase-icon ${isCheckPhase ? (passed ? "pass" : "fail") : ""}`}>
                   {icon}
                 </span>
                 {i < stages.length - 1 && <div className="pav-step-line" />}
@@ -79,8 +81,8 @@ export default function PavCard({ stages }: { stages: PavStage[] }) {
                   </div>
                 )}
 
-                {/* Verify phase: command + collapsible output */}
-                {s.phase === "verify" && s.command && (
+                {/* Verify / Review phase: command + collapsible output */}
+                {(s.phase === "verify" || s.phase === "review") && s.command && (
                   <div className="pav-verify">
                     <code className="pav-cmd">$ {s.command}</code>
                     {s.output && (

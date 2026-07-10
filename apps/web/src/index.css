@@ -1129,3 +1129,64 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
   .workspace { display: none; }
   .chat-top { padding-left: 52px; }
 }
+
+/* ---------------- cookbook hardware detection ---------------- */
+.hw-detect { margin: 16px 0; }
+.hw-detect-btn {
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--accent2)));
+  color: #fff; border: none; border-radius: 10px; padding: 10px 20px;
+  font: 500 14px/1 'Inter', sans-serif; cursor: pointer;
+  transition: opacity 0.15s, transform 0.15s;
+}
+.hw-detect-btn:hover:not(:disabled) { opacity: 0.85; transform: translateY(-1px); }
+.hw-detect-btn:disabled { opacity: 0.6; cursor: wait; }
+.hw-detect-btn.loading { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+.hw-error { color: var(--warn); font-size: 13px; margin-top: 8px; }
+.hw-results { margin-top: 16px; }
+.hw-info {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px;
+  padding: 12px; border-radius: 10px; background: var(--panel2); border: 1px solid var(--line);
+}
+.hw-stat { display: flex; gap: 8px; align-items: baseline; }
+.hw-stat-label {
+  font-size: 11px; font-weight: 600; color: var(--faint); text-transform: uppercase;
+  min-width: 60px; flex: none;
+}
+.hw-stat-value { font-size: 13px; color: var(--text); }
+.hw-summary {
+  margin: 12px 0; padding: 10px 14px; border-radius: 8px; font-size: 13px;
+  color: var(--dim); background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  border-left: 3px solid var(--accent);
+}
+.hw-recs { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 12px; }
+.hw-rec {
+  padding: 12px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--panel);
+}
+.hw-rec-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.hw-rec-name { font-weight: 600; font-size: 14px; }
+.hw-rec-tier {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 2px 8px;
+  border-radius: 6px; letter-spacing: 0.5px;
+}
+.tier-tiny { color: var(--accent2); background: color-mix(in srgb, var(--accent2) 15%, transparent); }
+.tier-small { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.tier-medium { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+.tier-large { color: #ff6b9d; background: color-mix(in srgb, #ff6b9d 15%, transparent); }
+.hw-rec-meta { display: flex; gap: 8px; font-size: 11.5px; color: var(--faint); flex-wrap: wrap; }
+.hw-rec-notes { font-size: 12.5px; color: var(--dim); margin: 6px 0; }
+.hw-rec-pull {
+  display: flex; align-items: center; gap: 6px; margin-top: 8px;
+  background: var(--panel2); border-radius: 8px; padding: 6px 10px;
+}
+.hw-rec-cmd {
+  flex: 1; font: 12px/1.4 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--accent2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hw-copy-btn {
+  background: none; border: none; color: var(--faint); cursor: pointer;
+  font-size: 13px; padding: 2px;
+}
+.hw-copy-btn:hover { color: var(--accent2); }
+.hw-copy-btn.copied { color: var(--accent2); }

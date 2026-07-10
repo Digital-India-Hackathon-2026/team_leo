@@ -440,20 +440,15 @@ export default function App() {
                         );
                       }
                       if (part.type === "data-pav") {
-                        // Collect all pav stages from consecutive data-pav parts
-                        const pavStages: PavStage[] = [];
-                        for (let j = i; j < m.parts.length; j++) {
-                          const p = m.parts[j];
-                          if (p.type === "data-pav") {
-                            pavStages.push((p as { data?: PavStage }).data as PavStage);
-                          } else if (p.type !== "text") break;
-                          else break;
+                        // Only render PavCard once (on the first data-pav part)
+                        if (i > 0 && m.parts.slice(0, i).some((p) => p.type === "data-pav")) {
+                          return null;
                         }
-                        // Only render PavCard on the first data-pav part
-                        if (i === 0 || m.parts[i - 1]?.type !== "data-pav") {
-                          return <PavCard key={i} stages={pavStages} />;
-                        }
-                        return null;
+                        // Collect ALL pav stages from this message
+                        const pavStages: PavStage[] = m.parts
+                          .filter((p) => p.type === "data-pav")
+                          .map((p) => (p as { data?: PavStage }).data as PavStage);
+                        return <PavCard key={i} stages={pavStages} />;
                       }
                       if (part.type === "data-permission-request") {
                         const d = (part as { data?: { id?: string; tool?: string; input?: unknown } }).data;
