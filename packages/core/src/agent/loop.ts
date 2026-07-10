@@ -42,6 +42,14 @@ export interface AgentRunOptions {
   autoCompact?: boolean;
   /** Model Crew: run the scout→brief pipeline before the brain turn (opt-in). */
   orchestrate?: boolean;
+  /**
+   * Permission approval channel for side-effecting tools in Default mode. The host
+   * resolves each request id with a decision; core emits a `data-permission-request`
+   * chunk and awaits it. "always" auto-approves that tool for the rest of the turn.
+   */
+  approval?: {
+    waitForDecision: (id: string, meta: { tool: string; input: unknown }) => Promise<"allow" | "deny" | "always">;
+  };
   system?: string;
   /** fires once, after the successful attempt fully streams */
   onFinishTurn?: (r: AgentTurnResult) => void | Promise<void>;
@@ -108,6 +116,23 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
     execute: async ({ writer }) => {
       let modelMessages = await convertToModelMessages(opts.messages);
 
+      // Build the tool-approval gate: emit a request chunk, await the host's decision.
+      // "always" auto-approves that tool for the remainder of this turn.
+      const alwaysAllow = new Set<string>();
+      const requestApproval = opts.approval
+        ? async ({ tool, input }: { tool: string; input: unknown }): Promise<boolean> => {
+            if (alwaysAllow.has(tool)) return true;
+            const id = crypto.randomUUID();
+            writer.write({ type: "data-permission-request", data: { id, tool, input } } as unknown as UIMessageChunk);
+            const decision = await opts.approval!.waitForDecision(id, { tool, input });
+            if (decision === "always") {
+              alwaysAllow.add(tool);
+              return true;
+            }
+            return decision === "allow";
+          }
+        : undefined;
+
       // Model Crew orchestration (opt-in): a fast scout picks relevant files and fast
       // summarizers brief them in parallel; the brief is injected so the brain starts
       // with context already known. Strictly additive — any failure just skips it.
@@ -170,7 +195,7 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
             handoffNote,
           messages: modelMessages,
           tools: {
-            ...buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []) }),
+            ...buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []), requestApproval }),
             ...(opts.extraTools ?? {}),
           },
           stopWhen: stepCountIs(16),

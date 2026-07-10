@@ -8,6 +8,7 @@ import {
   ChatRequestSchema,
   CompareRequestSchema,
   CreateSessionRequestSchema,
+  PermissionDecisionSchema,
 } from "@personacode/contracts";
 import {
   SessionStore,
@@ -50,6 +51,22 @@ import { config as dotenvConfig } from "dotenv";
 const app = new Hono();
 const store = new SessionStore();
 const shared = new Map<string, string>(); // shareId → frozen session JSON
+
+// Pending tool-approval requests: id → resolver. A turn's tool awaits here until the
+// client POSTs a decision to /api/permission (or the request times out → deny).
+const pendingApprovals = new Map<string, (d: "allow" | "deny" | "always") => void>();
+const APPROVAL_TIMEOUT_MS = 120_000;
+function waitForDecision(id: string): Promise<"allow" | "deny" | "always"> {
+  return new Promise((resolve) => {
+    const done = (d: "allow" | "deny" | "always") => {
+      clearTimeout(timer);
+      pendingApprovals.delete(id);
+      resolve(d);
+    };
+    const timer = setTimeout(() => done("deny"), APPROVAL_TIMEOUT_MS);
+    pendingApprovals.set(id, done);
+  });
+}
 
 app.use("/api/*", cors());
 
@@ -233,6 +250,8 @@ app.post("/api/chat", async (c) => {
     extraTools,
     disabledTools: body.disabledTools,
     orchestrate: body.orchestrate,
+    // Enable the y/n/always approval gate only when the client can answer prompts.
+    approval: body.approvals ? { waitForDecision: (id) => waitForDecision(id) } : undefined,
     system: ctx.system || undefined,
     onFallback: (from, to, reason) =>
       console.warn(`[fallback] ${from} → ${to}: ${reason.slice(0, 200)}`),
@@ -254,6 +273,15 @@ app.post("/api/chat", async (c) => {
   });
 
   return createUIMessageStreamResponse({ stream });
+});
+
+// ---- tool permission decisions (answers a data-permission-request) ----
+app.post("/api/permission", async (c) => {
+  const { id, decision } = PermissionDecisionSchema.parse(await c.req.json());
+  const resolve = pendingApprovals.get(id);
+  if (!resolve) return c.json({ error: "unknown or expired request" }, 404);
+  resolve(decision);
+  return c.json({ ok: true });
 });
 
 // ---- compare ----

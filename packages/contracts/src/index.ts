@@ -147,7 +147,16 @@ export const ChatRequestSchema = z.object({
   disabledTools: z.array(z.string()).optional(),
   /** Model Crew: run the multi-model scout→brief pipeline before the brain turn. */
   orchestrate: z.boolean().optional(),
+  /** Client can answer `data-permission-request` prompts (y/n/always) via POST /api/permission. */
+  approvals: z.boolean().optional(),
 });
+
+// Client → server decision for a pending tool-approval request.
+export const PermissionDecisionSchema = z.object({
+  id: z.string(),
+  decision: z.enum(["allow", "deny", "always"]),
+});
+export type PermissionDecision = z.infer<typeof PermissionDecisionSchema>;
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
 // ---------- Compare ----------
