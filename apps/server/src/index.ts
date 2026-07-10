@@ -20,8 +20,26 @@ import {
   runAgentTurn,
 } from "@personacode/core";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import "dotenv/config";
+import { dirname, join } from "node:path";
+import { config as dotenvConfig } from "dotenv";
+
+// Load .env from the nearest ancestor that has one, so keys are found whether the
+// server is launched from the repo root or from apps/server (pnpm sets cwd to the
+// package dir, where dotenv's default cwd lookup would miss the root .env).
+(function loadEnv() {
+  let dir = process.cwd();
+  for (let i = 0; i < 6; i++) {
+    const candidate = join(dir, ".env");
+    if (existsSync(candidate)) {
+      dotenvConfig({ path: candidate });
+      return;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  dotenvConfig(); // fall back to default behavior if no .env found
+})();
 
 const app = new Hono();
 const store = new SessionStore();

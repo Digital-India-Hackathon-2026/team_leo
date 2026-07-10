@@ -40,7 +40,16 @@ export interface AgentRunOptions {
   onFallback?: (from: string, to: string, reason: string) => void;
 }
 
-function isQuotaError(msg: string): boolean {
+/**
+ * Should this provider error trigger a fallback to the next provider?
+ * Covers three families of "this provider can't serve the request" failures:
+ *  - rate/quota limits (429, quota, overloaded, insufficient)
+ *  - transient upstream outages (503, 500, overloaded)
+ *  - auth / key problems (401/403, invalid or killed API key, permission denied)
+ * A killed/invalid key surfaces as "API key not valid" (400) or 403 — the plan's
+ * "kill the key to demo fallback" only works if those hand off instead of hard-failing.
+ */
+function shouldFallback(msg: string): boolean {
   const m = msg.toLowerCase();
   return (
     m.includes("429") ||
@@ -48,9 +57,16 @@ function isQuotaError(msg: string): boolean {
     m.includes("quota") ||
     m.includes("overloaded") ||
     m.includes("503") ||
-    m.includes("unauthorized") ||
+    m.includes("500") ||
+    m.includes("insufficient") ||
     m.includes("401") ||
-    m.includes("insufficient")
+    m.includes("403") ||
+    m.includes("unauthorized") ||
+    m.includes("forbidden") ||
+    m.includes("permission denied") ||
+    m.includes("api key not valid") ||
+    m.includes("invalid api key") ||
+    m.includes("api_key_invalid")
   );
 }
 
@@ -80,22 +96,19 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
 
       for (let i = 0; i < chain.length; i++) {
         const ref = chain[i];
-        const messages: ModelMessage[] =
+        // The handoff brief must go in the `system` instructions, NOT as a system
+        // message inside `messages` — AI SDK v7 rejects system-role messages there
+        // (InvalidPromptError), which would make every fallback attempt fail.
+        const handoffNote =
           i === 0
-            ? modelMessages
-            : [
-                {
-                  role: "system",
-                  content: `HANDOFF: model ${chain[i - 1]} hit a provider limit mid-conversation. Continue seamlessly from the conversation state. Do NOT restart, re-plan, or repeat completed work.`,
-                },
-                ...modelMessages,
-              ];
+            ? ""
+            : `\n\nHANDOFF: model ${chain[i - 1]} hit a provider limit mid-conversation. Continue seamlessly from the conversation state. Do NOT restart, re-plan, or repeat completed work.`;
 
         let finished: AgentTurnResult | undefined;
         const result = streamText({
           model: getModel(ref),
-          system: SYSTEM_PROMPT + MODE_HINTS[mode] + (opts.system ? `\n${opts.system}` : ""),
-          messages,
+          system: SYSTEM_PROMPT + MODE_HINTS[mode] + (opts.system ? `\n${opts.system}` : "") + handoffNote,
+          messages: modelMessages,
           tools: buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []) }),
           stopWhen: stepCountIs(16),
           onFinish: ({ text, totalUsage }) => {
@@ -113,7 +126,13 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
 
         let errorText: string | undefined;
         try {
-          for await (const chunk of result.toUIMessageStream({ sendStart: i === 0 })) {
+          // onError surfaces the REAL provider message in the error chunk; without it
+          // the SDK masks every failure as "An error occurred", so shouldFallback()
+          // could never see "429"/"api key not valid" and fallback never fired.
+          for await (const chunk of result.toUIMessageStream({
+            sendStart: i === 0,
+            onError: (err) => (err instanceof Error ? err.message : String(err)),
+          })) {
             if (chunk.type === "error") {
               errorText = chunk.errorText;
               break;
@@ -131,7 +150,7 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
 
         lastError = errorText;
         const next = chain[i + 1];
-        if (isQuotaError(errorText) && next) {
+        if (shouldFallback(errorText) && next) {
           setCooldown(providerOf(ref), 5 * 60_000);
           opts.onFallback?.(ref, next, errorText);
           writer.write({
@@ -170,7 +189,7 @@ export async function generateWithFallback(prompt: string, modelRef?: string) {
     } catch (err) {
       lastError = err;
       const msg = String((err as Error)?.message ?? err);
-      if (!isQuotaError(msg)) throw err;
+      if (!shouldFallback(msg)) throw err;
       setCooldown(providerOf(ref), 5 * 60_000);
     }
   }
