@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ProviderInfo } from "@personacode/contracts";
+import type { ProviderInfo, SetupScoutResponse } from "@personacode/contracts";
 
 type McpTool = { name: string; server: string; description?: string };
 type McpData = { servers: Array<{ name: string; status: string }>; tools: McpTool[] };
@@ -15,13 +15,35 @@ export default function SettingsPage() {
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [restoring, setRestoring] = useState<string | null>(null);
 
+  const [setupScout, setSetupScout] = useState<SetupScoutResponse | null>(null);
+  const [scouting, setScouting] = useState(false);
+  const [applyingScout, setApplyingScout] = useState(false);
+
   useEffect(() => {
     fetch("/api/providers").then((r) => r.json()).then(setProviders).catch(() => {});
     fetch("/api/mcp").then((r) => r.json()).then(setMcp).catch(() => {});
     fetch("/api/memory").then((r) => r.json()).then((d) => setMemories(d.memories ?? [])).catch(() => {});
     fetch("/api/skills").then((r) => r.json()).then((d) => setSkills(d.skills ?? [])).catch(() => {});
     fetch("/api/checkpoints").then((r) => r.json()).then((d) => setCheckpoints(d.checkpoints ?? [])).catch(() => {});
+    runScout(false);
   }, []);
+
+  async function runScout(apply: boolean) {
+    if (apply) setApplyingScout(true);
+    else setScouting(true);
+    try {
+      const res = await fetch("/api/setup-scout", {
+        method: apply ? "POST" : "GET",
+        headers: apply ? { "content-type": "application/json" } : undefined,
+        body: apply ? JSON.stringify({ apply: true }) : undefined,
+      });
+      if (res.ok) {
+        setSetupScout(await res.json());
+      }
+    } catch { /* ignore */ }
+    if (apply) setApplyingScout(false);
+    else setScouting(false);
+  }
 
   async function restore(hash: string) {
     setRestoring(hash);
@@ -41,6 +63,60 @@ export default function SettingsPage() {
   return (
     <div className="settings-page">
       <h2>⚙ Settings</h2>
+
+      {/* Setup Scout */}
+      <section className="settings-section scout-section">
+        <div className="scout-header">
+          <h3>🔍 Setup Scout</h3>
+          <button className="scout-refresh-btn" onClick={() => runScout(false)} disabled={scouting || applyingScout}>
+            {scouting ? "Scanning…" : "Rescan"}
+          </button>
+        </div>
+        <p className="settings-hint">Automatically configures Personacode for this workspace.</p>
+        
+        {setupScout && (
+          <div className="scout-content">
+            <div className="scout-detected">
+              <div className="settings-sub">Detected Stack</div>
+              <div className="scout-chips">
+                {setupScout.detected.languages.map((l) => <span key={l} className="scout-chip lang">{l}</span>)}
+                {setupScout.detected.frameworks.map((f) => <span key={f} className="scout-chip fw">{f}</span>)}
+                {setupScout.detected.packageManager && <span className="scout-chip pm">{setupScout.detected.packageManager}</span>}
+                {setupScout.detected.scripts.map((s) => <span key={s} className="scout-chip script">{s}</span>)}
+              </div>
+            </div>
+
+            {(setupScout.recommendations.mcpServers.length > 0 || setupScout.recommendations.skills.length > 0 || setupScout.recommendations.personaTemplate) && (
+              <div className="scout-recs">
+                <div className="settings-sub">Recommendations</div>
+                <ul className="scout-recs-list">
+                  {setupScout.recommendations.mcpServers.map((m) => (
+                    <li key={m.name}><strong>MCP Server:</strong> {m.name} - {m.description}</li>
+                  ))}
+                  {setupScout.recommendations.skills.map((s) => (
+                    <li key={s.name}><strong>Skill:</strong> {s.name} - {s.description}</li>
+                  ))}
+                  {setupScout.recommendations.personaTemplate && (
+                    <li><strong>Persona:</strong> Project-specific instructions</li>
+                  )}
+                </ul>
+                <button className="scout-apply-btn" onClick={() => runScout(true)} disabled={applyingScout}>
+                  {applyingScout ? "Applying…" : "✨ Apply Recommendations"}
+                </button>
+              </div>
+            )}
+
+            {setupScout.applied.length > 0 && (
+              <div className="scout-applied">
+                <div className="settings-sub">Applied Successfully</div>
+                <ul className="scout-applied-list">
+                  {setupScout.applied.map((a) => <li key={a}>✓ {a}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* Providers */}
       <section className="settings-section">

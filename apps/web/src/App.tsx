@@ -14,9 +14,10 @@ import NotesPage from "./pages/NotesPage";
 import TasksPage from "./pages/TasksPage";
 import GalleryPage from "./pages/GalleryPage";
 import CookbookPage from "./pages/CookbookPage";
+import AgentsPage from "./pages/AgentsPage";
 import { timeAgo } from "./utils/timeAgo";
 
-type AppView = "chat" | "compare" | "settings" | "notes" | "tasks" | "gallery" | "cookbook";
+type AppView = "chat" | "compare" | "settings" | "notes" | "tasks" | "gallery" | "cookbook" | "agents";
 
 const MODES: Mode[] = ["default", "plan", "auto", "edit"];
 const MODE_META: Record<Mode, { label: string; hint: string; tone: "" | "plan" | "auto" | "edit" }> = {
@@ -94,6 +95,7 @@ export default function App() {
   const [preview, setPreview] = useState<{ path: string; content: string } | null>(null);
   const [crew, setCrew] = useState(false);
   const [pav, setPav] = useState(false);
+  const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Answered tool-permission requests: id → the decision taken (hides the buttons).
@@ -144,9 +146,9 @@ export default function App() {
     () =>
       new DefaultChatTransport({
         api: "/api/chat",
-        body: () => ({ sessionId, model, mode, orchestrate: crew, pav, approvals: true }),
+        body: () => ({ sessionId, model, mode, orchestrate: crew, pav, approvals: true, agent: activeAgent ?? undefined }),
       }),
-    [sessionId, model, mode, crew, pav]
+    [sessionId, model, mode, crew, pav, activeAgent]
   );
   const { messages, sendMessage, status, setMessages } = useChat({ transport });
 
@@ -325,6 +327,7 @@ export default function App() {
           <button className={`rail-link ${view === "tasks" ? "on" : ""}`} onClick={() => setView("tasks")}>☑ Tasks</button>
           <button className={`rail-link ${view === "gallery" ? "on" : ""}`} onClick={() => setView("gallery")}>🖼 Gallery</button>
           <button className={`rail-link ${view === "cookbook" ? "on" : ""}`} onClick={() => setView("cookbook")}>📖 Cookbook</button>
+          <button className={`rail-link ${view === "agents" ? "on" : ""}`} onClick={() => setView("agents")}>🤖 Agents</button>
           <button className={`rail-link ${view === "settings" ? "on" : ""}`} onClick={() => setView("settings")}>⚙ Settings</button>
         </div>
         <ThemePicker />
@@ -332,18 +335,23 @@ export default function App() {
       </aside>
 
       {/* ---------------- main content ---------------- */}
-      {view === "compare" ? (
-        <main className="chat"><ComparePage /></main>
-      ) : view === "settings" ? (
-        <main className="chat"><SettingsPage /></main>
-      ) : view === "notes" ? (
-        <main className="chat"><NotesPage /></main>
-      ) : view === "tasks" ? (
-        <main className="chat"><TasksPage /></main>
-      ) : view === "gallery" ? (
-        <main className="chat"><GalleryPage /></main>
-      ) : view === "cookbook" ? (
-        <main className="chat"><CookbookPage /></main>
+      {view !== "chat" ? (
+        <main className="chat">
+          {view === "compare" && <ComparePage />}
+          {view === "notes" && <NotesPage />}
+          {view === "tasks" && <TasksPage />}
+          {view === "gallery" && <GalleryPage />}
+          {view === "cookbook" && <CookbookPage />}
+          {view === "agents" && (
+            <AgentsPage
+              onSelectAgent={(name) => {
+                setActiveAgent(name);
+                setView("chat");
+              }}
+            />
+          )}
+          {view === "settings" && <SettingsPage />}
+        </main>
       ) : (
       <main className="chat">
         <header className="chat-top">
@@ -571,6 +579,15 @@ export default function App() {
             <button className="ctl icon" title="Attach (coming soon)" disabled>
               📎
             </button>
+            {activeAgent && (
+              <button
+                className="ctl active-agent-btn"
+                title="Active superagent. Click to clear."
+                onClick={() => setActiveAgent(null)}
+              >
+                🤖 {activeAgent} ✕
+              </button>
+            )}
             <label className="ctl select">
               <span className="ctl-ico">◈</span>
               <select value={model ?? ""} onChange={(e) => setModel(e.target.value)}>
