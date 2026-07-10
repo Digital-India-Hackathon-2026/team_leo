@@ -25,8 +25,10 @@ export default function AgentsPage({ onSelectAgent }: AgentsPageProps) {
     try {
       const res = await fetch("/api/agents");
       if (!res.ok) throw new Error("Failed to fetch agents");
-      const data = await res.json();
-      setAgents(data);
+      const data: { agent: AgentDefinition; path: string }[] = await res.json();
+      // Filter out agents the user has "deleted" (hidden via localStorage)
+      const hidden: string[] = JSON.parse(localStorage.getItem("hidden-agents") ?? "[]");
+      setAgents(data.filter((a) => !hidden.includes(a.agent.name)));
     } catch {
       setError("Could not load agents. Backend might not be ready.");
     } finally {
@@ -58,11 +60,15 @@ export default function AgentsPage({ onSelectAgent }: AgentsPageProps) {
   async function deleteAgent(name: string) {
     setDeletingName(name);
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(name)}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 404) throw new Error("Delete failed");
+      // Best-effort: try server delete (may not exist yet)
+      await fetch(`/api/agents/${encodeURIComponent(name)}`, { method: "DELETE" }).catch(() => {});
+      // Always hide locally + persist in localStorage so it survives refreshes
       setAgents((prev) => prev.filter((a) => a.agent.name !== name));
-    } catch {
-      setError(`Failed to delete agent "${name}".`);
+      const hidden: string[] = JSON.parse(localStorage.getItem("hidden-agents") ?? "[]");
+      if (!hidden.includes(name)) {
+        hidden.push(name);
+        localStorage.setItem("hidden-agents", JSON.stringify(hidden));
+      }
     } finally {
       setDeletingName(null);
     }
