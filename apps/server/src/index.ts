@@ -20,7 +20,8 @@ import {
   runAgentTurn,
 } from "@personacode/core";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readdir, readFile as fsReadFile, stat } from "node:fs/promises";
+import { dirname, join, resolve, sep } from "node:path";
 import { config as dotenvConfig } from "dotenv";
 
 // Load .env from the nearest ancestor that has one, so keys are found whether the
@@ -31,14 +32,14 @@ import { config as dotenvConfig } from "dotenv";
   for (let i = 0; i < 6; i++) {
     const candidate = join(dir, ".env");
     if (existsSync(candidate)) {
-      dotenvConfig({ path: candidate });
+      dotenvConfig({ path: candidate, quiet: true });
       return;
     }
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  dotenvConfig(); // fall back to default behavior if no .env found
+  dotenvConfig({ quiet: true }); // fall back to default behavior if no .env found
 })();
 
 const app = new Hono();
@@ -50,6 +51,80 @@ app.use("/api/*", cors());
 app.get("/api/health", (c) => c.json({ ok: true, mock: isMockMode() }));
 app.get("/api/providers", (c) => c.json(listProviders()));
 app.get("/api/models", (c) => c.json(listModels()));
+
+// ---- workspace files (powers the Files tab) ----
+// The project the agent works on. pnpm runs the server with cwd=apps/server, so
+// default to the repo root (nearest ancestor with pnpm-workspace.yaml or .git).
+// Override with PERSONACODE_WORKSPACE to point at any project directory.
+function findWorkspaceRoot(): string {
+  if (process.env.PERSONACODE_WORKSPACE) return resolve(process.env.PERSONACODE_WORKSPACE);
+  let dir = process.cwd();
+  for (let i = 0; i < 6; i++) {
+    if (existsSync(join(dir, "pnpm-workspace.yaml")) || existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return process.cwd();
+}
+const WS_ROOT = findWorkspaceRoot();
+const WS_IGNORE = new Set([
+  "node_modules", ".git", "dist", "build", ".turbo", "coverage", ".personacode", ".pnpm",
+  ".claude", ".playwright-mcp", ".understand-anything", ".vscode", ".idea",
+]);
+function isSecretPath(rel: string): boolean {
+  const base = rel.split(/[\\/]/).pop() ?? "";
+  return /^\.env(\.|$)/.test(base) && base !== ".env.example";
+}
+
+app.get("/api/files", async (c) => {
+  type Node = { name: string; path: string; type: "dir" | "file"; size?: number; children?: Node[] };
+  async function walk(dir: string, rel: string, depth: number): Promise<Node[]> {
+    if (depth > 6) return [];
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const dirs: Node[] = [];
+    const files: Node[] = [];
+    for (const e of entries) {
+      if (WS_IGNORE.has(e.name)) continue;
+      const relPath = rel ? `${rel}/${e.name}` : e.name;
+      if (isSecretPath(relPath)) continue;
+      if (e.isDirectory()) {
+        dirs.push({ name: e.name, path: relPath, type: "dir", children: await walk(join(dir, e.name), relPath, depth + 1) });
+      } else {
+        let size: number | undefined;
+        try {
+          size = (await stat(join(dir, e.name))).size;
+        } catch {
+          /* ignore */
+        }
+        files.push({ name: e.name, path: relPath, type: "file", size });
+      }
+    }
+    dirs.sort((a, b) => a.name.localeCompare(b.name));
+    files.sort((a, b) => a.name.localeCompare(b.name));
+    return [...dirs, ...files];
+  }
+  return c.json({ root: WS_ROOT.split(/[\\/]/).pop() ?? "workspace", tree: await walk(WS_ROOT, "", 0) });
+});
+
+app.get("/api/file", async (c) => {
+  const rel = c.req.query("path") ?? "";
+  const full = resolve(WS_ROOT, rel);
+  // Guard against path traversal and secret files.
+  if (full !== WS_ROOT && !full.startsWith(WS_ROOT + sep)) return c.json({ error: "outside workspace" }, 403);
+  if (isSecretPath(rel)) return c.json({ error: "not readable" }, 403);
+  try {
+    const content = await fsReadFile(full, "utf8");
+    return c.json({ path: rel, content: content.slice(0, 200_000), truncated: content.length > 200_000 });
+  } catch {
+    return c.json({ error: "not found or not text" }, 404);
+  }
+});
 
 // ---- sessions ----
 app.get("/api/sessions", (c) => c.json(store.list()));

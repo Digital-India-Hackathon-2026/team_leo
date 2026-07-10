@@ -4,9 +4,16 @@ import TextInput from "ink-text-input";
 import type { UIMessage } from "ai";
 import type { Mode } from "@personacode/contracts";
 import { MODE_LABELS } from "@personacode/contracts";
-import { defaultModelRef, isMockMode, runAgentTurn } from "@personacode/core";
+import { contextWindowFor, defaultModelRef, isMockMode, runAgentTurn } from "@personacode/core";
 
 const MODES: Mode[] = ["default", "auto", "plan", "edit"];
+
+/** 648 → "648", 12_345 → "12.3k", 1_048_576 → "1M". */
+function fmtNum(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + "k";
+  return String(n);
+}
 
 interface Line {
   role: "user" | "assistant" | "system";
@@ -130,6 +137,8 @@ export default function App() {
   }
 
   const modeInfo = MODE_LABELS[mode];
+  const ctxWindow = model.startsWith("(") ? 0 : contextWindowFor(model);
+  const ctxPct = ctxWindow > 0 ? (tokens / ctxWindow) * 100 : 0;
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -160,7 +169,10 @@ export default function App() {
         <Text color={mode === "auto" ? "yellow" : mode === "plan" ? "blue" : "gray"}>
           {modeInfo.chip}
         </Text>
-        <Text dimColor>{tokens} tok</Text>
+        <Text dimColor>
+          {fmtNum(tokens)}
+          {ctxWindow > 0 ? `/${fmtNum(ctxWindow)} · ${ctxPct.toFixed(ctxPct < 10 ? 1 : 0)}%` : " tok"}
+        </Text>
         <Text dimColor>Shift+Tab: mode</Text>
       </Box>
     </Box>
