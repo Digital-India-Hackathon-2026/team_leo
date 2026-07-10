@@ -129,6 +129,21 @@ export const emailAdapter: ChannelAdapter = {
         logger: false,
       });
 
+      // CRITICAL: catch 'error' events to prevent process crash (EADDRNOTAVAIL, ECONNRESET, etc.)
+      imapClient.on("error", (err: Error) => {
+        console.error("[email] IMAP connection error:", err.message);
+      });
+
+      // Handle unexpected disconnects gracefully — stop polling, clean up
+      imapClient.on("close", () => {
+        console.warn("[email] IMAP connection closed unexpectedly");
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+        imapClient = null;
+      });
+
       await imapClient.connect();
       console.log(`[email] IMAP connected to ${cfg.imapHost} as ${cfg.user}`);
 
