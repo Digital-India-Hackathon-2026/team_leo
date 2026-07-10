@@ -4,6 +4,8 @@
 
 Personacode is an open-source, privacy-first agent platform: a Claude-Code-style CLI **and** a self-hosted web app (the "PewDiePie self-hosted AI" experience), with multi-provider LLM support, MCP, skills, memory, agent modes, and integrations. Built by a 3-person team in ~3 days for a hackathon: **Dev A (you, Claude Code Pro)** owns the core, **Dev B and Dev C (beginners, Antigravity IDE)** own isolated, spec-driven verticals. Budget: **$0 — free-forever providers only.**
 
+**Hackathon theme — Digital India / open solutions.** Personacode is our answer: an **open-source, free-to-run, privacy-first, multilingual** AI agent any Indian dev or citizen can self-host for ₹0 — in their own language, even offline. The theme is crystallized by **Bharat Mode (#30)**: Indic vernacular + voice access on top of the existing offline (local Ollama) + data-sovereignty (self-hosted, zero telemetry) story = digital *inclusion* and *sovereignty*.
+
 Guiding constraints:
 - **72 hours** → ruthless scope triage; every feature is either *core demo*, *quick win*, or *stubbed-by-design*.
 - **Zero budget** → multi-provider free tiers chained with fallback (this is also a headline feature).
@@ -116,6 +118,14 @@ Configure ALL of these on Day 0 (each is no-credit-card; each key takes ~2 min).
 27. **Themes** — JSON tokens → TUI colors + web CSS variables; "ask the agent to make a theme" = agent writes a theme JSON via a skill.
 28. **Deep Research** — an agent preset: iterative search → fetch → note-taking → synthesis → markdown report with citations. Runs on Cerebras/Gemini (big free token budgets).
 29. **ACP support (Agent Client Protocol)** — thin `apps/acp` adapter using the official `@agentclientprotocol/sdk` (Zed's TS library): implement the agent side (`initialize`, `newSession`, `prompt` → forward to core session API, stream `sessionUpdate`s back). Makes Personacode usable inside Zed and any ACP-capable editor. ~Half a day for Dev A on Day 3 **if** Tier 1 is done; otherwise first post-hackathon item.
+
+### Digital India theme — Bharat Mode
+30. **Bharat Mode (Digital-India / open-solutions centerpiece)** — turns Personacode into a *vernacular, inclusive, sovereign* AI agent for India. Four parts, all $0:
+    - **Indic multilingual** (core + web): a language selector (Hindi, Bengali, Tamil, Telugu, Marathi, Kannada, Gujarati, …) → the agent understands and **responds / plans / comments in the chosen language**, reusing the free multilingual models we already ship (Gemini & Llama handle 20+ Indian languages). One optional `language` field on `ChatRequest` + session → a "respond in <language>" instruction injected into the system prompt (PERSONA.md/memory honored). CLI `/lang <code>`, web picker on the composer. **Low effort, high demo value** — "ask it in Hindi, it edits code and replies in Hindi."
+    - **Voice I/O (accessibility)** (web-only): optional mic + speak buttons via the browser **Web Speech API** (free, on-device, no key) for hands-free / low-literacy access. Pure `apps/web`, no backend.
+    - **Digital-sovereignty pillar** (already built — just frame it): runs fully **offline** via local Ollama and **privacy-first** (self-hosted, nothing leaves the device, zero telemetry). The pitch: "an open solution any Indian citizen/dev can self-host for ₹0, in their own language, even without internet."
+    - **Stretch (on-theme, post-hackathon)**: **Bhashini** (India's national translation/ASR API) as an alternate language provider; an **India-Stack / DPI MCP** (DigiLocker/UPI sandbox) as a demo skill. Both need API access → not in the 72h.
+    - Owners: core `language` plumbing = Dev A; language picker + voice = Dev B; framing/docs = Dev C. Legal/naming: "Bharat Mode" is an original name; no third-party branding.
 
 ### Tier 3 — Stretch / post-hackathon
 - LSP integration (start `typescript-language-server`/`pyright` if found; feed diagnostics to the agent after edits) — valuable but heavy; only if Day 3 is smooth.
