@@ -42,7 +42,7 @@ import {
   runSetupScout,
   resolveWorkspacePath,
 } from "@personacode/core";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { readdir, readFile as fsReadFile, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -474,13 +474,43 @@ if (existsSync(webDist)) {
 
 const port = Number(process.env.PERSONACODE_PORT ?? 3789);
 const hostname = process.env.PERSONACODE_HOST ?? "127.0.0.1";
+
+// PID file so `pcode --stop` can find and stop this server (even one we spawned and
+// detached). Lives in the git-ignored .personacode/ dir, keyed by port.
+const pidFile = join(WS_ROOT, ".personacode", `server-${port}.pid`);
+function writePidFile(): void {
+  try {
+    mkdirSync(join(WS_ROOT, ".personacode"), { recursive: true });
+    writeFileSync(pidFile, JSON.stringify({ pid: process.pid, port, hostname, mock: isMockMode() }), "utf8");
+  } catch {
+    /* best-effort — stop-by-PID just won't be available */
+  }
+}
+function removePidFile(): void {
+  try {
+    rmSync(pidFile, { force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
 serve({ fetch: app.fetch, port, hostname }, () => {
+  writePidFile();
   console.log(
-    `Personacode server → http://${hostname}:${port}  ${isMockMode() ? "(MOCK MODE — no keys needed)" : ""}`
+    `Personacode server → http://${hostname === "0.0.0.0" ? "localhost" : hostname}:${port}  ${isMockMode() ? "(MOCK MODE — no keys needed)" : ""}`
   );
   void startChannelHub();
   void startScheduledAgents();
 });
+
+// Always clean up the PID file and stop channels on the way out, however we exit.
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    removePidFile();
+    void stopChannelHub().finally(() => process.exit(0));
+  });
+}
+process.once("exit", removePidFile);
 
 const channelQueues = new Map<string, Promise<void>>();
 const startedAdapters: ChannelAdapter[] = [];
@@ -661,8 +691,3 @@ async function registerScheduledAgent(agent: AgentDefinition): Promise<void> {
   console.log(`[schedule] ${agent.name} registered (${agent.schedule})`);
 }
 
-if (process.env.PERSONACODE_CHANNELS === "1") {
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => void stopChannelHub().finally(() => process.exit(0)));
-  }
-}

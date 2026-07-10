@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { defaultBase, getHealth } from "./api.js";
 
 /** Walk up from `start` to find the monorepo root (has pnpm-workspace.yaml). */
-function findRepoRoot(start: string): string | null {
+export function findRepoRoot(start: string): string | null {
   let dir = start;
   for (let i = 0; i < 8; i++) {
     if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
@@ -28,7 +28,7 @@ export interface ServerHandle {
  * root and poll /api/health. Fail-soft: returns started:false if we can't spawn,
  * so the caller can tell the user to run `pnpm dev` manually.
  */
-export async function ensureServer(): Promise<ServerHandle & { error?: string }> {
+export async function ensureServer(opts: { host?: string } = {}): Promise<ServerHandle & { error?: string }> {
   const base = defaultBase();
   const existing = await getHealth(base);
   if (existing) return { base, mock: existing.mock, started: false };
@@ -46,6 +46,8 @@ export async function ensureServer(): Promise<ServerHandle & { error?: string }>
       env: {
         ...process.env,
         PERSONACODE_WORKSPACE: process.env.PERSONACODE_WORKSPACE ?? root,
+        // `pcode --web` passes host "0.0.0.0" so other devices on the LAN can reach it.
+        ...(opts.host ? { PERSONACODE_HOST: opts.host } : {}),
       },
       stdio: "ignore",
       windowsHide: true,

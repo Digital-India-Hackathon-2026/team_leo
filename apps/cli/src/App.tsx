@@ -24,6 +24,32 @@ import {
 
 const MODES: Mode[] = ["default", "auto", "plan", "edit"];
 
+interface Cmd {
+  name: string;
+  args?: string;
+  desc: string;
+}
+/** Slash commands for the autocomplete menu (shown as you type `/`). */
+const COMMANDS: Cmd[] = [
+  { name: "init", desc: "scan project → write PERSONA.md" },
+  { name: "setup", args: "[apply]", desc: "Setup Scout: recommend MCP / skills / PERSONA.md" },
+  { name: "agent", args: 'new "…" | use "…" | off', desc: "build or select a custom agent" },
+  { name: "memory", desc: "list recalled memory" },
+  { name: "skills", desc: "list skills" },
+  { name: "mcp", desc: "list MCP servers" },
+  { name: "hooks", desc: "list hooks.json hooks" },
+  { name: "rewind", args: "[n]", desc: "list / restore checkpoints" },
+  { name: "usage", desc: "token usage this session" },
+  { name: "compact", desc: "compaction status" },
+  { name: "crew", args: "[on|off]", desc: "⚡ Model Crew orchestration" },
+  { name: "pav", args: "[on|off]", desc: "⚙ Plan → Apply → Verify loop" },
+  { name: "mode", args: "<m>", desc: "default | auto | plan | edit" },
+  { name: "model", args: "<ref>", desc: "set the model" },
+  { name: "connect", desc: "how to add a provider key" },
+  { name: "help", desc: "list all commands" },
+  { name: "exit", desc: "quit Personacode" },
+];
+
 /** 648 → "648", 12_345 → "12.3k", 1_048_576 → "1M". */
 function fmtNum(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1) + "M";
@@ -46,6 +72,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [history, setHistory] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
+  const [selected, setSelected] = useState(0); // highlighted slash-command suggestion
   const [mode, setMode] = useState<Mode>("default");
   const [busy, setBusy] = useState(false);
   const [crew, setCrew] = useState(false);
@@ -63,6 +90,11 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
       return mock ? "mock/mock" : "(no provider — /connect or set PERSONACODE_MOCK=1)";
     }
   });
+
+  // Slash-command autocomplete: show a filtered menu while typing `/name` (no space yet).
+  const slashQuery = !busy && input.startsWith("/") && !input.includes(" ") ? input.slice(1).toLowerCase() : null;
+  const suggestions = slashQuery !== null ? COMMANDS.filter((c) => c.name.startsWith(slashQuery)) : [];
+  const sel = suggestions.length ? Math.min(selected, suggestions.length - 1) : 0;
 
   // Create a server-backed session on mount (enables context/checkpoints/usage).
   useEffect(() => {
@@ -96,6 +128,17 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
     if (key.escape && busy) {
       abortRef.current?.abort();
       sys("⎋ interrupted");
+    }
+    // Slash-command menu navigation (ink-text-input ignores Tab / ↑ / ↓, so these are free).
+    if (suggestions.length > 0) {
+      if (key.downArrow) return void setSelected((s) => (s + 1) % suggestions.length);
+      if (key.upArrow) return void setSelected((s) => (s - 1 + suggestions.length) % suggestions.length);
+      if (key.tab && !key.shift) {
+        setInput(`/${suggestions[sel].name} `);
+        setSelected(0);
+        return;
+      }
+      if (key.escape) return void setInput("");
     }
     if (key.tab && key.shift) setMode((m) => MODES[(MODES.indexOf(m) + 1) % MODES.length]);
   });
@@ -371,7 +414,39 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
       ) : (
         <Box borderStyle="round" borderColor={mode === "auto" ? "yellow" : "gray"} paddingX={1}>
           <Text color="magentaBright">❯ </Text>
-          <TextInput value={input} onChange={setInput} onSubmit={(v) => submit(v)} placeholder="Message… (/help)" />
+          <TextInput
+            value={input}
+            onChange={(v) => {
+              setInput(v);
+              setSelected(0);
+            }}
+            onSubmit={(v) => {
+              // Enter with the menu open runs the highlighted command.
+              if (slashQuery !== null && suggestions.length > 0) {
+                const name = suggestions[sel].name;
+                setInput("");
+                setSelected(0);
+                void handleCommand(`/${name}`);
+                return;
+              }
+              submit(v);
+            }}
+            placeholder="Message…  (type / for commands)"
+          />
+        </Box>
+      )}
+
+      {suggestions.length > 0 && !pendingPerm && (
+        <Box flexDirection="column" paddingX={1}>
+          {suggestions.slice(0, 8).map((c, i) => (
+            <Text key={c.name} color={i === sel ? "magentaBright" : undefined} dimColor={i !== sel}>
+              {i === sel ? "❯ " : "  "}/{c.name}
+              {c.args ? ` ${c.args}` : ""}
+              {"  —  "}
+              {c.desc}
+            </Text>
+          ))}
+          <Text dimColor>↑/↓ select · Tab complete · Enter run · Esc dismiss</Text>
         </Box>
       )}
 
