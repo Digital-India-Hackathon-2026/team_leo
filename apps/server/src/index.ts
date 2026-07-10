@@ -43,6 +43,7 @@ import {
   resolveWorkspacePath,
 } from "@personacode/core";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { readdir, readFile as fsReadFile, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -476,11 +477,14 @@ const port = Number(process.env.PERSONACODE_PORT ?? 3789);
 const hostname = process.env.PERSONACODE_HOST ?? "127.0.0.1";
 
 // PID file so `pcode --stop` can find and stop this server (even one we spawned and
-// detached). Lives in the git-ignored .personacode/ dir, keyed by port.
-const pidFile = join(WS_ROOT, ".personacode", `server-${port}.pid`);
+// detached). Lives in a stable PER-USER dir (~/.personacode/run/), NOT the repo — so
+// it works the same whether Personacode is run from the repo or installed globally
+// (npm i -g / curl|bash), and from any working directory.
+const runDir = join(homedir(), ".personacode", "run");
+const pidFile = join(runDir, `server-${port}.json`);
 function writePidFile(): void {
   try {
-    mkdirSync(join(WS_ROOT, ".personacode"), { recursive: true });
+    mkdirSync(runDir, { recursive: true });
     writeFileSync(pidFile, JSON.stringify({ pid: process.pid, port, hostname, mock: isMockMode() }), "utf8");
   } catch {
     /* best-effort — stop-by-PID just won't be available */

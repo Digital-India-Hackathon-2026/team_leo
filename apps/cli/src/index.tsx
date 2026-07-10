@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
-import { networkInterfaces } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { config as dotenvConfig } from "dotenv";
 import { render } from "ink";
 import App from "./App.js";
-import { ensureServer, findRepoRoot } from "./server.js";
+import { ensureServer } from "./server.js";
 
 // Load .env from the nearest ancestor that has one, so keys are found no matter
 // which directory `personacode`/`pnpm cli` is launched from (dotenv's default
@@ -54,32 +54,64 @@ function lanUrls(): string[] {
   return urls;
 }
 
-/** Locate the server's PID file (written by the server on boot). */
-function pidFilePath(): string | null {
-  const root =
-    findRepoRoot(process.cwd()) ??
-    findRepoRoot(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")));
-  return root ? join(root, ".personacode", `server-${port}.pid`) : null;
+/** The server's PID file — a stable per-user path (matches the server's own path),
+ * so `--stop` works from any directory and whether run from the repo or installed. */
+function pidFilePath(): string {
+  return join(homedir(), ".personacode", "run", `server-${port}.json`);
 }
 
-// `pcode --stop`: read the PID file and stop the server (however it was started).
+function killPid(pid: number): void {
+  if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(pid), "/F", "/T"], { stdio: "ignore" });
+  else {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/** Fallback: find and kill whatever process is LISTENING on `port` (any server,
+ * even one started before PID files existed or by `pnpm dev`). Returns count killed. */
+function killByPort(p: string): number {
+  const pids = new Set<string>();
+  if (process.platform === "win32") {
+    const out = spawnSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf8" }).stdout ?? "";
+    for (const line of out.split("\n")) {
+      if (/LISTENING/i.test(line) && new RegExp(`[:.]${p}\\s`).test(line)) {
+        const pid = line.trim().split(/\s+/).pop();
+        if (pid && pid !== "0") pids.add(pid);
+      }
+    }
+  } else {
+    const out = spawnSync("lsof", ["-ti", `tcp:${p}`, "-sTCP:LISTEN"], { encoding: "utf8" }).stdout ?? "";
+    for (const pid of out.split("\n")) if (pid.trim()) pids.add(pid.trim());
+  }
+  for (const pid of pids) killPid(Number(pid));
+  return pids.size;
+}
+
+// `pcode --stop`: stop the server however it was started — PID file first, then by port.
 if (wantStop) {
+  let stopped = false;
   const pf = pidFilePath();
-  if (!pf || !existsSync(pf)) {
-    console.log(`No running Personacode server found for port ${port}.`);
-    process.exit(0);
-  }
-  try {
-    const { pid } = JSON.parse(readFileSync(pf, "utf8")) as { pid: number };
-    if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(pid), "/F", "/T"], { stdio: "ignore" });
-    else process.kill(pid, "SIGTERM");
+  if (existsSync(pf)) {
+    try {
+      const { pid } = JSON.parse(readFileSync(pf, "utf8")) as { pid: number };
+      killPid(pid);
+      stopped = true;
+      console.log(`Stopped Personacode server (pid ${pid}).`);
+    } catch {
+      /* fall through to port scan */
+    }
     rmSync(pf, { force: true });
-    console.log(`Stopped Personacode server (pid ${pid}).`);
-    process.exit(0);
-  } catch (err) {
-    console.error(`Could not stop the server: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
   }
+  if (!stopped && killByPort(port) > 0) {
+    stopped = true;
+    console.log(`Stopped Personacode server on port ${port}.`);
+  }
+  if (!stopped) console.log(`No running Personacode server found for port ${port}.`);
+  process.exit(0);
 }
 
 /** Open a URL in the user's default browser (best-effort, cross-platform). */

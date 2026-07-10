@@ -34,14 +34,23 @@ export async function ensureServer(opts: { host?: string } = {}): Promise<Server
   if (existing) return { base, mock: existing.mock, started: false };
 
   const root = findRepoRoot(process.cwd()) ?? findRepoRoot(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")));
-  const entry = root ? join(root, "apps", "server", "src", "index.ts") : null;
-  if (!root || !entry || !existsSync(entry)) {
-    return { base, mock: false, started: false, error: "server not running and repo root not found" };
+  const srcEntry = root ? join(root, "apps", "server", "src", "index.ts") : null;
+  const distEntry = root ? join(root, "apps", "server", "dist", "index.js") : null;
+  // Dev (repo checkout): run the source via tsx so it's always current. Installed /
+  // built: run the compiled dist (no tsx runtime dependency needed).
+  const spawnArgs =
+    srcEntry && existsSync(srcEntry)
+      ? ["--import", "tsx", srcEntry]
+      : distEntry && existsSync(distEntry)
+        ? [distEntry]
+        : null;
+  if (!root || !spawnArgs) {
+    return { base, mock: false, started: false, error: "server not running and could not locate the server to start" };
   }
 
   let child: ChildProcess;
   try {
-    child = spawn(process.execPath, ["--import", "tsx", entry], {
+    child = spawn(process.execPath, spawnArgs, {
       cwd: root,
       env: {
         ...process.env,
