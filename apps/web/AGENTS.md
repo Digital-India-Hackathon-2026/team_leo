@@ -1,5 +1,8 @@
 # apps/web — Dev B's package (Personacode Web App)
 
+> ➡ **Current tasks: [`docs/handoff/dev-b-web-tasks.md`](../../docs/handoff/dev-b-web-tasks.md).**
+> Your Day 1–3 spec is done; that file has the new tasks (PAV card, share button, polish).
+
 You (and your AI agent) work ONLY inside `apps/web/`. Never edit other packages.
 Types come from `@personacode/contracts` — import them, never redefine them.
 The full API surface is documented at the top of `packages/contracts/src/index.ts`.

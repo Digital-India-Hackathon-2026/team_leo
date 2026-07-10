@@ -54,6 +54,18 @@ export {
   type ScoutResult,
 } from "./agent/scout.js";
 export {
+  runPavLoop,
+  writePlanFile,
+  type PavRunOptions,
+  type PavStage,
+} from "./agent/pav.js";
+export {
+  detectVerifyCommands,
+  runVerify,
+  runCommand,
+  type VerifyResult,
+} from "./agent/verify.js";
+export {
   modelForRole,
   nextParallelRef,
   resetParallelCursor,

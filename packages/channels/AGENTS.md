@@ -1,5 +1,9 @@
 # packages/channels — Dev C's package (Channels + Email Assistant)
 
+> ➡ **Current tasks: [`docs/handoff/dev-c-channels-tasks.md`](../../docs/handoff/dev-c-channels-tasks.md).**
+> Your adapters + docs are done; that file has the new tasks (real-credential testing,
+> screenshots, cookbook catalog, end-to-end test after Dev A mounts channels).
+
 You (and your AI agent) work ONLY inside `packages/channels/` and `docs/`.
 The one interface you implement is `ChannelAdapter` from `@personacode/contracts`
 (read it: `packages/contracts/src/index.ts`). Do not edit other packages.
