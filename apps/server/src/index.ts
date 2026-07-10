@@ -11,16 +11,22 @@ import {
 } from "@personacode/contracts";
 import {
   SessionStore,
+  CheckpointStore,
+  buildProjectContext,
   compareModels,
   contextWindowFor,
   defaultModelRef,
+  getMcpManager,
   isMockMode,
+  listMemories,
   listModels,
   listProviders,
+  listSkills,
   runAgentTurn,
 } from "@personacode/core";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readdir, readFile as fsReadFile, stat } from "node:fs/promises";
+import { dirname, join, resolve, sep } from "node:path";
 import { config as dotenvConfig } from "dotenv";
 
 // Load .env from the nearest ancestor that has one, so keys are found whether the
@@ -31,14 +37,14 @@ import { config as dotenvConfig } from "dotenv";
   for (let i = 0; i < 6; i++) {
     const candidate = join(dir, ".env");
     if (existsSync(candidate)) {
-      dotenvConfig({ path: candidate });
+      dotenvConfig({ path: candidate, quiet: true });
       return;
     }
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  dotenvConfig(); // fall back to default behavior if no .env found
+  dotenvConfig({ quiet: true }); // fall back to default behavior if no .env found
 })();
 
 const app = new Hono();
@@ -50,6 +56,114 @@ app.use("/api/*", cors());
 app.get("/api/health", (c) => c.json({ ok: true, mock: isMockMode() }));
 app.get("/api/providers", (c) => c.json(listProviders()));
 app.get("/api/models", (c) => c.json(listModels()));
+
+// MCP server status + tool inventory (from .personacode/mcp.json in the workspace).
+app.get("/api/mcp", async (c) => {
+  const mcp = getMcpManager();
+  await mcp.ensureConnected(WS_ROOT);
+  return c.json({
+    servers: mcp.status(),
+    tools: mcp.listTools().map((t) => ({ name: t.qualifiedName, server: t.server, description: t.description })),
+  });
+});
+
+// ---- workspace files (powers the Files tab) ----
+// The project the agent works on. pnpm runs the server with cwd=apps/server, so
+// default to the repo root (nearest ancestor with pnpm-workspace.yaml or .git).
+// Override with PERSONACODE_WORKSPACE to point at any project directory.
+function findWorkspaceRoot(): string {
+  if (process.env.PERSONACODE_WORKSPACE) return resolve(process.env.PERSONACODE_WORKSPACE);
+  let dir = process.cwd();
+  for (let i = 0; i < 6; i++) {
+    if (existsSync(join(dir, "pnpm-workspace.yaml")) || existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return process.cwd();
+}
+const WS_ROOT = findWorkspaceRoot();
+const checkpoints = new CheckpointStore(WS_ROOT);
+const WS_IGNORE = new Set([
+  "node_modules", ".git", "dist", "build", ".turbo", "coverage", ".personacode", ".pnpm",
+  ".claude", ".playwright-mcp", ".understand-anything", ".vscode", ".idea",
+]);
+function isSecretPath(rel: string): boolean {
+  const base = rel.split(/[\\/]/).pop() ?? "";
+  return /^\.env(\.|$)/.test(base) && base !== ".env.example";
+}
+
+app.get("/api/files", async (c) => {
+  type Node = { name: string; path: string; type: "dir" | "file"; size?: number; children?: Node[] };
+  async function walk(dir: string, rel: string, depth: number): Promise<Node[]> {
+    if (depth > 6) return [];
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const dirs: Node[] = [];
+    const files: Node[] = [];
+    for (const e of entries) {
+      if (WS_IGNORE.has(e.name)) continue;
+      const relPath = rel ? `${rel}/${e.name}` : e.name;
+      if (isSecretPath(relPath)) continue;
+      if (e.isDirectory()) {
+        dirs.push({ name: e.name, path: relPath, type: "dir", children: await walk(join(dir, e.name), relPath, depth + 1) });
+      } else {
+        let size: number | undefined;
+        try {
+          size = (await stat(join(dir, e.name))).size;
+        } catch {
+          /* ignore */
+        }
+        files.push({ name: e.name, path: relPath, type: "file", size });
+      }
+    }
+    dirs.sort((a, b) => a.name.localeCompare(b.name));
+    files.sort((a, b) => a.name.localeCompare(b.name));
+    return [...dirs, ...files];
+  }
+  return c.json({ root: WS_ROOT.split(/[\\/]/).pop() ?? "workspace", tree: await walk(WS_ROOT, "", 0) });
+});
+
+app.get("/api/file", async (c) => {
+  const rel = c.req.query("path") ?? "";
+  const full = resolve(WS_ROOT, rel);
+  // Guard against path traversal and secret files.
+  if (full !== WS_ROOT && !full.startsWith(WS_ROOT + sep)) return c.json({ error: "outside workspace" }, 403);
+  if (isSecretPath(rel)) return c.json({ error: "not readable" }, 403);
+  try {
+    const content = await fsReadFile(full, "utf8");
+    return c.json({ path: rel, content: content.slice(0, 200_000), truncated: content.length > 200_000 });
+  } catch {
+    return c.json({ error: "not found or not text" }, 404);
+  }
+});
+
+// ---- memory + skills (project context inventory) ----
+app.get("/api/memory", async (c) => {
+  const memories = await listMemories(WS_ROOT);
+  return c.json({ memories: memories.map((m) => ({ name: m.name, description: m.description })) });
+});
+app.get("/api/skills", async (c) => {
+  const skills = await listSkills(WS_ROOT);
+  return c.json({ skills: skills.map((s) => ({ name: s.name, description: s.description })) });
+});
+
+// ---- checkpoints (shadow-git rewind) ----
+app.get("/api/checkpoints", async (c) => c.json({ checkpoints: await checkpoints.list() }));
+app.post("/api/checkpoints/restore", async (c) => {
+  const { hash } = (await c.req.json().catch(() => ({}))) as { hash?: string };
+  if (!hash) return c.json({ error: "hash required" }, 400);
+  try {
+    await checkpoints.restore(hash);
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
 
 // ---- sessions ----
 app.get("/api/sessions", (c) => c.json(store.list()));
@@ -90,10 +204,35 @@ app.post("/api/chat", async (c) => {
   const modelRef = body.model ?? session?.model ?? defaultModelRef();
   const mode = body.mode ?? session?.mode ?? "default";
 
+  // Assemble project context (PERSONA.md + recalled memory + skills catalog),
+  // scored against the latest user message, and inject it as extra system text.
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const query = (lastUser?.parts ?? [])
+    .map((p) => ((p as { type: string; text?: string }).type === "text" ? (p as { text?: string }).text ?? "" : ""))
+    .join(" ");
+  const ctx = await buildProjectContext({ cwd: WS_ROOT, query });
+
+  // Auto-checkpoint before any turn that can modify files (not plan mode), so the
+  // user can /rewind. Fail-soft: a checkpoint error must never block the chat.
+  if (mode !== "plan") {
+    checkpoints
+      .snapshot(`before: ${query.slice(0, 60) || "turn"}`)
+      .catch((err) => console.warn(`[checkpoint] skipped: ${err instanceof Error ? err.message : err}`));
+  }
+
+  // Connect configured MCP servers (memoized) and expose their tools this turn.
+  const mcp = getMcpManager();
+  await mcp.ensureConnected(WS_ROOT);
+  const extraTools = mcp.buildToolSet({ mode, disabled: new Set(body.disabledTools ?? []) });
+
   const stream = runAgentTurn({
     messages,
     modelRef,
     mode,
+    cwd: WS_ROOT,
+    extraTools,
+    disabledTools: body.disabledTools,
+    system: ctx.system || undefined,
     onFallback: (from, to, reason) =>
       console.warn(`[fallback] ${from} → ${to}: ${reason.slice(0, 200)}`),
     onFinishTurn: ({ text, usage, modelRef: usedRef }) => {
