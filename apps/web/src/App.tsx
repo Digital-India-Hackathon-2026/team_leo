@@ -97,6 +97,10 @@ export default function App() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const prevStatus = useRef<string | undefined>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Live token consumption counter
+  const [liveTokens, setLiveTokens] = useState<{ input: number; output: number; total: number } | null>(null);
+  const [streamElapsed, setStreamElapsed] = useState(0);
+  const streamStartRef = useRef<number>(0);
 
   async function decide(id: string, decision: "allow" | "deny" | "always") {
     setAnswered((a) => ({ ...a, [id]: decision }));
@@ -168,9 +172,50 @@ export default function App() {
   useEffect(() => {
     if (prevStatus.current === "streaming" && status !== "streaming") {
       fetch("/api/sessions").then((r) => r.json()).then(setSessions).catch(() => {});
+      // Fetch real token usage after streaming ends
+      if (sessionId) {
+        fetch(`/api/sessions/${sessionId}/usage`)
+          .then((r) => r.json())
+          .then((u) => {
+            if (u.total) setLiveTokens({ input: u.total.inputTokens, output: u.total.outputTokens, total: u.total.totalTokens });
+            // Keep the final count visible for 4 seconds, then fade out
+            setTimeout(() => setLiveTokens(null), 4000);
+          })
+          .catch(() => { setTimeout(() => setLiveTokens(null), 2000); });
+      }
     }
     prevStatus.current = status;
-  }, [status]);
+  }, [status, sessionId]);
+
+  // Live token estimation during streaming
+  useEffect(() => {
+    if (status === "streaming") {
+      streamStartRef.current = Date.now();
+      setStreamElapsed(0);
+      const interval = setInterval(() => {
+        setStreamElapsed(Math.floor((Date.now() - streamStartRef.current) / 1000));
+        // Estimate tokens from the last assistant message text (~4 chars per token)
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg?.role === "assistant") {
+          const textLen = lastMsg.parts
+            .filter((p) => p.type === "text")
+            .reduce((acc, p) => acc + ((p as { text: string }).text?.length ?? 0), 0);
+          const estimatedOutput = Math.max(1, Math.round(textLen / 4));
+          // Input tokens: estimate from all user messages in this conversation
+          const userTextLen = messages
+            .filter((m) => m.role === "user")
+            .reduce((acc, m) => acc + m.parts.filter((p) => p.type === "text").reduce((a2, p) => a2 + ((p as { text: string }).text?.length ?? 0), 0), 0);
+          const estimatedInput = Math.max(1, Math.round(userTextLen / 4));
+          setLiveTokens({
+            input: estimatedInput,
+            output: estimatedOutput,
+            total: estimatedInput + estimatedOutput,
+          });
+        }
+      }, 200);
+      return () => clearInterval(interval);
+    }
+  }, [status, messages]);
 
   async function newSession() {
     const res = await fetch("/api/sessions", {
@@ -386,6 +431,36 @@ export default function App() {
             )}
           </div>
         </div>
+
+        {/* Live token counter */}
+        {liveTokens && (
+          <div className={`token-counter ${status === "streaming" ? "streaming" : "final"}`}>
+            <div className="token-counter-inner">
+              <span className="token-counter-icon">{status === "streaming" ? "⟳" : "◈"}</span>
+              <span className="token-counter-item">
+                <span className="token-label">In</span>
+                <span className="token-value">{liveTokens.input.toLocaleString()}</span>
+              </span>
+              <span className="token-sep">·</span>
+              <span className="token-counter-item">
+                <span className="token-label">Out</span>
+                <span className="token-value out">{liveTokens.output.toLocaleString()}</span>
+              </span>
+              <span className="token-sep">·</span>
+              <span className="token-counter-item">
+                <span className="token-label">Total</span>
+                <span className="token-value total">{liveTokens.total.toLocaleString()}</span>
+              </span>
+              {status === "streaming" && (
+                <>
+                  <span className="token-sep">·</span>
+                  <span className="token-elapsed">{streamElapsed}s</span>
+                </>
+              )}
+              {status !== "streaming" && <span className="token-final-badge">✓ final</span>}
+            </div>
+          </div>
+        )}
 
         {modeTone && (
           <div className={`mode-banner ${modeTone}`}>
