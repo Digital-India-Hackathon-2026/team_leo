@@ -38,6 +38,13 @@ export {
 } from "./context/index.js";
 export { CheckpointStore, type Checkpoint } from "./checkpoints/index.js";
 export {
+  compactConversation,
+  shouldCompact,
+  approxTokens,
+  COMPACT_THRESHOLD,
+  type CompactionResult,
+} from "./agent/compaction.js";
+export {
   McpManager,
   getMcpManager,
   loadMcpConfig,
