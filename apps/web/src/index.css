@@ -1407,7 +1407,11 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .agent-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .agent-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .agent-card-header h4 { font-size: 15px; font-weight: 600; margin: 0; color: var(--text); }
+.agent-header-badges { display: flex; align-items: center; gap: 6px; flex: none; }
 .agent-mode-badge { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--panel2); color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+.agent-delete-btn { background: none; border: none; color: var(--faint); font-size: 14px; cursor: pointer; padding: 2px 4px; border-radius: 4px; transition: 0.15s; }
+.agent-delete-btn:hover:not(:disabled) { color: var(--warn); background: rgba(255,107,107,0.1); }
+.agent-delete-btn:disabled { opacity: 0.4; cursor: wait; }
 .agent-desc { font-size: 13px; color: var(--dim); line-height: 1.5; margin: 0; }
 .agent-meta { display: flex; flex-direction: column; gap: 4px; background: var(--panel2); padding: 8px 10px; border-radius: 8px; margin-top: auto; }
 .agent-stat { font-size: 12px; color: var(--text); }

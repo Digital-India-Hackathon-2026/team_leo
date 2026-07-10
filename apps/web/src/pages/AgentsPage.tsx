@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import type { AgentDefinition, CreateAgentResponse } from "@personacode/contracts";
 
-export default function AgentsPage({ onSelectAgent }: { onSelectAgent: (name: string) => void }) {
+interface AgentsPageProps {
+  onSelectAgent: (name: string, preferredModel?: string) => void;
+}
+
+const FREE_PROVIDERS = new Set(["google", "groq", "cerebras", "openrouter"]);
+
+export default function AgentsPage({ onSelectAgent }: AgentsPageProps) {
   const [agents, setAgents] = useState<{ agent: AgentDefinition; path: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -9,6 +15,7 @@ export default function AgentsPage({ onSelectAgent }: { onSelectAgent: (name: st
   const [prompt, setPrompt] = useState("");
   const [building, setBuilding] = useState(false);
   const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
+  const [deletingName, setDeletingName] = useState<string | null>(null);
 
   useEffect(() => {
     fetchAgents();
@@ -48,6 +55,27 @@ export default function AgentsPage({ onSelectAgent }: { onSelectAgent: (name: st
     }
   }
 
+  async function deleteAgent(name: string) {
+    setDeletingName(name);
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(name)}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) throw new Error("Delete failed");
+      setAgents((prev) => prev.filter((a) => a.agent.name !== name));
+    } catch {
+      setError(`Failed to delete agent "${name}".`);
+    } finally {
+      setDeletingName(null);
+    }
+  }
+
+  function selectAgent(agent: AgentDefinition) {
+    // If the agent has a model set and it's from a free provider, use it
+    // Otherwise pass undefined to let App.tsx pick the best free model
+    const agentModel = agent.model;
+    const isFreeModel = agentModel && FREE_PROVIDERS.has(agentModel.split("/")[0]);
+    onSelectAgent(agent.name, isFreeModel ? agentModel : undefined);
+  }
+
   return (
     <div className="agents-page">
       <div className="agents-header">
@@ -69,6 +97,7 @@ export default function AgentsPage({ onSelectAgent }: { onSelectAgent: (name: st
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="e.g., 'An agent that reviews pull requests for security vulnerabilities'..."
             rows={3}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); buildAgent(); } }}
           />
           <button className="agent-build-btn" onClick={buildAgent} disabled={building || !prompt.trim()}>
             {building ? "⚙ Building…" : "✨ Build Agent"}
@@ -79,7 +108,7 @@ export default function AgentsPage({ onSelectAgent }: { onSelectAgent: (name: st
       {error && <div className="agents-error">⚠ {error}</div>}
 
       <div className="agents-list-section">
-        <h3>Saved Agents</h3>
+        <h3>Saved Agents ({agents.length})</h3>
         {loading ? (
           <p className="agents-empty">Loading agents…</p>
         ) : agents.length === 0 ? (
@@ -90,12 +119,23 @@ export default function AgentsPage({ onSelectAgent }: { onSelectAgent: (name: st
               <div key={agent.name} className="agent-card">
                 <div className="agent-card-header">
                   <h4>{agent.name}</h4>
-                  <span className="agent-mode-badge">{agent.mode}</span>
+                  <div className="agent-header-badges">
+                    <span className="agent-mode-badge">{agent.mode}</span>
+                    <button
+                      className="agent-delete-btn"
+                      title={`Delete "${agent.name}"`}
+                      aria-label={`Delete agent ${agent.name}`}
+                      onClick={() => deleteAgent(agent.name)}
+                      disabled={deletingName === agent.name}
+                    >
+                      {deletingName === agent.name ? "…" : "✕"}
+                    </button>
+                  </div>
                 </div>
                 <p className="agent-desc">{agent.description}</p>
                 <div className="agent-meta">
                   <div className="agent-stat">
-                    <span>Model:</span> {agent.model || "Auto"}
+                    <span>Model:</span> {agent.model || "Auto (free)"}
                   </div>
                   {agent.tools.length > 0 && (
                     <div className="agent-stat">
@@ -128,8 +168,8 @@ export default function AgentsPage({ onSelectAgent }: { onSelectAgent: (name: st
                 )}
                 <div className="agent-card-actions">
                   <span className="agent-path" title={path}>📁 {path.split(/[\\/]/).pop()}</span>
-                  <button className="agent-select-btn" onClick={() => onSelectAgent(agent.name)}>
-                    Chat with Agent
+                  <button className="agent-select-btn" onClick={() => selectAgent(agent)}>
+                    💬 Chat with Agent
                   </button>
                 </div>
               </div>

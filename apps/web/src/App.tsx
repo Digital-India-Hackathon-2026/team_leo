@@ -344,8 +344,19 @@ export default function App() {
           {view === "cookbook" && <CookbookPage />}
           {view === "agents" && (
             <AgentsPage
-              onSelectAgent={(name) => {
+              onSelectAgent={(name, preferredModel) => {
                 setActiveAgent(name);
+                // Pick a free model: use agent's preferred, or find first free model from loaded list
+                if (preferredModel) {
+                  setModel(preferredModel);
+                } else {
+                  const FREE_PROVIDERS = new Set(["google", "groq", "cerebras", "openrouter"]);
+                  const freeModel = models.find((m) => FREE_PROVIDERS.has(m.providerId));
+                  if (freeModel) setModel(freeModel.ref);
+                }
+                // Start a fresh session so the agent binding takes effect
+                setSessionId(undefined);
+                setMessages([]);
                 setView("chat");
               }}
             />
