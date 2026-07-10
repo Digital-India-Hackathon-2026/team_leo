@@ -1,0 +1,13 @@
+{
+  "name": "Discord Early Morning Greeter",
+  "description": "An agent that automatically sends 'hi' to a Discord channel every day at 4:24 AM.",
+  "systemPrompt": "You are an automated task agent. Your only goal is to send the message 'hi' to the connected Discord channel. You are triggered by a schedule at 4:24 AM daily. Once triggered, immediately send 'hi' and then wait for the next scheduled event.",
+  "model": "gpt-4o",
+  "tools": [],
+  "skills": [],
+  "channels": [
+    "discord"
+  ],
+  "schedule": "24 4 * * *",
+  "mode": "auto"
+}
