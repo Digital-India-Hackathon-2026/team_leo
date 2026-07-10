@@ -71,6 +71,19 @@ export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 export const ModeSchema = z.enum(["default", "plan", "auto", "edit"]);
 export type Mode = z.infer<typeof ModeSchema>;
 
+// ---------- Model Crew (multi-model orchestration) ----------
+export const ModelRoleSchema = z.enum(["scout", "summarizer", "brain", "reviewer", "router"]);
+export type ModelRole = z.infer<typeof ModelRoleSchema>;
+
+/** One step of the scout pipeline, streamed to clients as a `data-orchestration` chunk. */
+export const OrchestrationStageSchema = z.object({
+  stage: z.enum(["scout", "brief", "review"]),
+  model: z.string(),
+  ms: z.number(),
+  detail: z.string(),
+});
+export type OrchestrationStage = z.infer<typeof OrchestrationStageSchema>;
+
 export const MODE_LABELS: Record<Mode, { chip: string; warning?: string }> = {
   default: { chip: "DEFAULT" },
   plan: { chip: "⏸ PLAN — read-only" },
@@ -134,7 +147,16 @@ export const ChatRequestSchema = z.object({
   disabledTools: z.array(z.string()).optional(),
   /** Model Crew: run the multi-model scout→brief pipeline before the brain turn. */
   orchestrate: z.boolean().optional(),
+  /** Client can answer `data-permission-request` prompts (y/n/always) via POST /api/permission. */
+  approvals: z.boolean().optional(),
 });
+
+// Client → server decision for a pending tool-approval request.
+export const PermissionDecisionSchema = z.object({
+  id: z.string(),
+  decision: z.enum(["allow", "deny", "always"]),
+});
+export type PermissionDecision = z.infer<typeof PermissionDecisionSchema>;
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
 // ---------- Compare ----------

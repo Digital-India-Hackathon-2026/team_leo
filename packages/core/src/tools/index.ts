@@ -26,6 +26,20 @@ export interface ToolPolicy {
   cwd: string;
   /** names disabled via per-tool toggles */
   disabled: Set<string>;
+  /**
+   * Optional gate for side-effecting tools (bash/write_file) in Default mode.
+   * Resolves true to run, false to skip. Wired by the host (server) to prompt the
+   * user y/n/always; absent (CLI in-process, tests) means auto-allow.
+   */
+  requestApproval?: (info: { tool: string; input: unknown }) => Promise<boolean>;
+}
+
+/** Side-effecting tools that require confirmation in Default mode. */
+const NEEDS_APPROVAL = new Set(["bash", "write_file"]);
+
+async function approve(policy: ToolPolicy, tool: string, input: unknown): Promise<boolean> {
+  if (policy.mode !== "default" || !policy.requestApproval || !NEEDS_APPROVAL.has(tool)) return true;
+  return policy.requestApproval({ tool, input });
 }
 
 /** Mode → what's allowed. Plan: read-only. Edit: files but no shell. Auto/default: all. */
@@ -51,6 +65,7 @@ export function buildTools(policy: ToolPolicy): ToolSet {
       inputSchema: z.object({ command: z.string().describe("The shell command to run") }),
       execute: ({ command }) =>
         guard(policy, "bash", async () => {
+          if (!(await approve(policy, "bash", { command }))) return "Denied by user — command not run.";
           const { stdout, stderr } = await execAsync(command, {
             cwd: policy.cwd,
             timeout: 60_000,
@@ -72,6 +87,7 @@ export function buildTools(policy: ToolPolicy): ToolSet {
       inputSchema: z.object({ path: z.string(), content: z.string() }),
       execute: ({ path, content }) =>
         guard(policy, "write_file", async () => {
+          if (!(await approve(policy, "write_file", { path }))) return "Denied by user — file not written.";
           const full = resolve(policy.cwd, path);
           await mkdir(dirname(full), { recursive: true });
           await writeFile(full, content, "utf8");

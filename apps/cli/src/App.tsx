@@ -14,7 +14,9 @@ import {
   getMemory,
   getSkills,
   getUsage,
+  respondPermission,
   type CheckpointRow,
+  type PermissionRequest,
 } from "./api.js";
 
 const MODES: Mode[] = ["default", "auto", "plan", "edit"];
@@ -43,10 +45,12 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<Mode>("default");
   const [busy, setBusy] = useState(false);
+  const [crew, setCrew] = useState(false);
   const [tokens, setTokens] = useState(0);
   const [sessionId, setSessionId] = useState<string | undefined>();
   const abortRef = useRef<AbortController | null>(null);
   const [checkpoints, setCheckpoints] = useState<CheckpointRow[]>([]);
+  const [pendingPerm, setPendingPerm] = useState<PermissionRequest | null>(null);
   const [model, setModel] = useState<string>(() => {
     try {
       return defaultModelRef();
@@ -65,7 +69,21 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
 
   const sys = (text: string) => setLines((l) => [...l, { role: "system", text }]);
 
-  useInput((_input, key) => {
+  async function answerPerm(decision: "allow" | "deny" | "always") {
+    if (!pendingPerm) return;
+    await respondPermission(base, pendingPerm.id, decision);
+    sys(`🔒 ${decision === "deny" ? "denied" : decision === "always" ? "always allowed" : "allowed"} ${pendingPerm.tool}`);
+    setPendingPerm(null);
+  }
+
+  useInput((input, key) => {
+    // While a permission prompt is up, y/a/n (or Enter=allow, Esc=deny) answer it.
+    if (pendingPerm) {
+      if (input === "y" || key.return) void answerPerm("allow");
+      else if (input === "a") void answerPerm("always");
+      else if (input === "n" || key.escape) void answerPerm("deny");
+      return;
+    }
     if (key.escape && busy) {
       abortRef.current?.abort();
       sys("⎋ interrupted");
@@ -151,8 +169,14 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
       case "compact":
         sys(`compaction is automatic near the context limit (currently ${ctxPct.toFixed(0)}% of ${fmtNum(ctxWindow)}).`);
         return;
+      case "crew": {
+        const on = args[0] ? args[0] === "on" : !crew;
+        setCrew(on);
+        sys(`⚡ Model Crew ${on ? "ON" : "off"} — ${on ? "a fast scout gathers file context before the brain answers" : "single-model turns"}`);
+        return;
+      }
       case "help":
-        sys("/init /memory /skills /mcp /rewind [n] /usage /compact /mode <m> /model <ref> /connect /exit · Shift+Tab cycles modes · Esc interrupts");
+        sys("/init /memory /skills /mcp /rewind [n] /usage /compact /crew [on|off] /mode <m> /model <ref> /connect /exit · Shift+Tab cycles modes · Esc interrupts");
         return;
       default:
         sys(`Unknown command: /${name}`);
@@ -181,6 +205,8 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
           messages,
           model: model.startsWith("(") ? undefined : model,
           mode,
+          orchestrate: crew,
+          approvals: true,
         },
         {
           onTextDelta: (delta) =>
@@ -195,6 +221,8 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
               return copy;
             }),
           onFallback: (from, to) => sys(`⇄ fallback: ${from} → ${to}`),
+          onOrchestration: (s) => sys(`⚡ ${s.stage} ${s.model} — ${s.detail} · ${(s.ms / 1000).toFixed(1)}s`),
+          onPermission: (req) => setPendingPerm(req),
           onCompaction: () => sys("⟳ history auto-compacted to fit the context window"),
           onError: (m) => sys(`✖ ${m}`),
         },
@@ -240,14 +268,30 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         </Box>
       ))}
 
-      <Box borderStyle="round" borderColor={mode === "auto" ? "yellow" : "gray"} paddingX={1}>
-        <Text color="magentaBright">❯ </Text>
-        <TextInput value={input} onChange={setInput} onSubmit={(v) => submit(v)} placeholder="Message… (/help)" />
-      </Box>
+      {pendingPerm ? (
+        <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+          <Text color="yellow">
+            🔒 Allow <Text bold>{pendingPerm.tool}</Text>
+            {(() => {
+              const inp = pendingPerm.input as { command?: string; path?: string };
+              const d = inp?.command ?? inp?.path;
+              return d ? <Text dimColor> {d}</Text> : null;
+            })()}
+            ?
+          </Text>
+          <Text dimColor>[y]es · [a]lways · [n]o (Enter=yes, Esc=no)</Text>
+        </Box>
+      ) : (
+        <Box borderStyle="round" borderColor={mode === "auto" ? "yellow" : "gray"} paddingX={1}>
+          <Text color="magentaBright">❯ </Text>
+          <TextInput value={input} onChange={setInput} onSubmit={(v) => submit(v)} placeholder="Message… (/help)" />
+        </Box>
+      )}
 
       <Box gap={2}>
         <Text dimColor>{model}</Text>
         <Text color={mode === "auto" ? "yellow" : mode === "plan" ? "blue" : "gray"}>{modeInfo.chip}</Text>
+        {crew && <Text color="magentaBright">⚡ Crew</Text>}
         <Text dimColor>
           {fmtNum(tokens)}
           {ctxWindow > 0 ? `/${fmtNum(ctxWindow)} · ${ctxPct.toFixed(ctxPct < 10 ? 1 : 0)}%` : " tok"}

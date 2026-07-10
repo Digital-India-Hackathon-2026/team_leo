@@ -9,6 +9,7 @@ import type { ModelMessage, ToolSet, UIMessage, UIMessageChunk } from "ai";
 import type { Mode, TokenUsage } from "@personacode/contracts";
 import { buildTools } from "../tools/index.js";
 import { compactConversation, shouldCompact } from "./compaction.js";
+import { runScout } from "./scout.js";
 import { defaultModelRef, fallbackChain, getModel, setCooldown } from "../providers/registry.js";
 import type { ProviderId } from "@personacode/contracts";
 
@@ -39,6 +40,16 @@ export interface AgentRunOptions {
   extraTools?: ToolSet;
   /** Auto-compact the history when it nears the model's context window (default true). */
   autoCompact?: boolean;
+  /** Model Crew: run the scout→brief pipeline before the brain turn (opt-in). */
+  orchestrate?: boolean;
+  /**
+   * Permission approval channel for side-effecting tools in Default mode. The host
+   * resolves each request id with a decision; core emits a `data-permission-request`
+   * chunk and awaits it. "always" auto-approves that tool for the rest of the turn.
+   */
+  approval?: {
+    waitForDecision: (id: string, meta: { tool: string; input: unknown }) => Promise<"allow" | "deny" | "always">;
+  };
   system?: string;
   /** fires once, after the successful attempt fully streams */
   onFinishTurn?: (r: AgentTurnResult) => void | Promise<void>;
@@ -79,6 +90,14 @@ function providerOf(ref: string): ProviderId {
   return ref.slice(0, ref.indexOf("/")) as ProviderId;
 }
 
+/** Text of the most recent user message (for scout task + memory recall). */
+function lastUserText(messages: UIMessage[]): string {
+  const last = [...messages].reverse().find((m) => m.role === "user");
+  return (last?.parts ?? [])
+    .map((p) => ((p as { type: string; text?: string }).type === "text" ? (p as { text?: string }).text ?? "" : ""))
+    .join(" ");
+}
+
 /**
  * Agent turn with streaming + provider fallback + context handoff.
  *
@@ -96,6 +115,44 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
   return createUIMessageStream({
     execute: async ({ writer }) => {
       let modelMessages = await convertToModelMessages(opts.messages);
+
+      // Build the tool-approval gate: emit a request chunk, await the host's decision.
+      // "always" auto-approves that tool for the remainder of this turn.
+      const alwaysAllow = new Set<string>();
+      const requestApproval = opts.approval
+        ? async ({ tool, input }: { tool: string; input: unknown }): Promise<boolean> => {
+            if (alwaysAllow.has(tool)) return true;
+            const id = crypto.randomUUID();
+            writer.write({ type: "data-permission-request", data: { id, tool, input } } as unknown as UIMessageChunk);
+            const decision = await opts.approval!.waitForDecision(id, { tool, input });
+            if (decision === "always") {
+              alwaysAllow.add(tool);
+              return true;
+            }
+            return decision === "allow";
+          }
+        : undefined;
+
+      // Model Crew orchestration (opt-in): a fast scout picks relevant files and fast
+      // summarizers brief them in parallel; the brief is injected so the brain starts
+      // with context already known. Strictly additive — any failure just skips it.
+      let orchestrationBrief = "";
+      if (opts.orchestrate) {
+        try {
+          const task = lastUserText(opts.messages);
+          const scout = await runScout({ cwd, task });
+          if (scout) {
+            for (const st of scout.stages) {
+              writer.write({ type: "data-orchestration", data: st } as unknown as UIMessageChunk);
+            }
+            if (scout.brief) {
+              orchestrationBrief = `\n\nCONTEXT BRIEF (gathered by Model Crew scout — files already read, don't re-read them):\n${scout.brief}`;
+            }
+          }
+        } catch {
+          /* orchestration is additive; fall through to the normal turn */
+        }
+      }
 
       // Auto-compaction: if the history nears the context window, summarize the older
       // turns and carry the brief in the system prompt (fail-soft — keep full history
@@ -134,10 +191,11 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
             MODE_HINTS[mode] +
             (opts.system ? `\n${opts.system}` : "") +
             (compactionBrief ? `\n\n${compactionBrief}` : "") +
+            orchestrationBrief +
             handoffNote,
           messages: modelMessages,
           tools: {
-            ...buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []) }),
+            ...buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []), requestApproval }),
             ...(opts.extraTools ?? {}),
           },
           stopWhen: stepCountIs(16),
