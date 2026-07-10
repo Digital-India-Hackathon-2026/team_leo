@@ -36,6 +36,7 @@ export {
   type SkillFile,
   type Frontmatter,
 } from "./context/index.js";
+export { CheckpointStore, type Checkpoint } from "./checkpoints/index.js";
 export {
   McpManager,
   getMcpManager,

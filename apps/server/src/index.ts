@@ -11,6 +11,7 @@ import {
 } from "@personacode/contracts";
 import {
   SessionStore,
+  CheckpointStore,
   buildProjectContext,
   compareModels,
   contextWindowFor,
@@ -80,6 +81,7 @@ function findWorkspaceRoot(): string {
   return process.cwd();
 }
 const WS_ROOT = findWorkspaceRoot();
+const checkpoints = new CheckpointStore(WS_ROOT);
 const WS_IGNORE = new Set([
   "node_modules", ".git", "dist", "build", ".turbo", "coverage", ".personacode", ".pnpm",
   ".claude", ".playwright-mcp", ".understand-anything", ".vscode", ".idea",
@@ -138,6 +140,19 @@ app.get("/api/file", async (c) => {
   }
 });
 
+// ---- checkpoints (shadow-git rewind) ----
+app.get("/api/checkpoints", async (c) => c.json({ checkpoints: await checkpoints.list() }));
+app.post("/api/checkpoints/restore", async (c) => {
+  const { hash } = (await c.req.json().catch(() => ({}))) as { hash?: string };
+  if (!hash) return c.json({ error: "hash required" }, 400);
+  try {
+    await checkpoints.restore(hash);
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
+
 // ---- sessions ----
 app.get("/api/sessions", (c) => c.json(store.list()));
 app.post("/api/sessions", async (c) => {
@@ -184,6 +199,14 @@ app.post("/api/chat", async (c) => {
     .map((p) => ((p as { type: string; text?: string }).type === "text" ? (p as { text?: string }).text ?? "" : ""))
     .join(" ");
   const ctx = await buildProjectContext({ cwd: WS_ROOT, query });
+
+  // Auto-checkpoint before any turn that can modify files (not plan mode), so the
+  // user can /rewind. Fail-soft: a checkpoint error must never block the chat.
+  if (mode !== "plan") {
+    checkpoints
+      .snapshot(`before: ${query.slice(0, 60) || "turn"}`)
+      .catch((err) => console.warn(`[checkpoint] skipped: ${err instanceof Error ? err.message : err}`));
+  }
 
   // Connect configured MCP servers (memoized) and expose their tools this turn.
   const mcp = getMcpManager();
