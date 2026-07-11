@@ -128,7 +128,7 @@ Configure ALL of these on Day 0 (each is no-credit-card; each key takes ~2 min).
     - Owners: core `language` plumbing = Dev A; language picker + voice = Dev B; framing/docs = Dev C. Legal/naming: "Bharat Mode" is an original name; no third-party branding.
 
 ### Tier 3 — Stretch / post-hackathon
-- LSP integration (start `typescript-language-server`/`pyright` if found; feed diagnostics to the agent after edits) — valuable but heavy; only if Day 3 is smooth.
+- ✅ **LSP integration — DONE** (`packages/core/src/lsp/`): a minimal JSON-RPC LSP client that starts any installed language server (`typescript-language-server`, `pyright`, `gopls`, `rust-analyzer`, `clangd`, `vscode-langservers-extracted`) over stdio, opens files, and collects `publishDiagnostics`. Exposed as the `lsp_diagnostics` builtin tool (read-only; available in plan/edit/default/auto) **and** auto-run inside the PAV loop after each Apply pass — type/undefined-symbol errors on the edited files are fed straight back into the next Apply before the whole-repo verify runs. Fail-soft: no server installed → an "install X" hint, never a crash; mock mode returns a deterministic sample. Env override `PERSONACODE_LSP_<GROUP>` sets a custom server command.
 - Copilot login, embeddings-based memory recall, session sharing via tunnel, WhatsApp/SMS/Teams/GChat adapters, sandboxed bash.
 
 ## 5. Team Assignments
@@ -198,7 +198,7 @@ Isolated adapters, each testable standalone with a script.
 | Multi-provider + fallback | ✅ Tier 1 | CC doesn't have this — our headline |
 | Multi-model orchestration (Freebuff-style speed) | ✅ Tier 1 | #21 Model Crew — CC doesn't have this either; ours parallelizes across free providers |
 | ACP editor integration | 🟡 Tier 2 | #29 |
-| LSP diagnostics | 🟡 Tier 3 | stretch |
+| LSP diagnostics | ✅ done | `lsp/` JSON-RPC client → `lsp_diagnostics` tool + auto-run in PAV after edits; any installed language server, fail-soft |
 | Bash sandboxing (OS-level) | ❌ post-hackathon | permission gates only for now |
 | IDE extensions, vim mode, cloud/background agents | ❌ post-hackathon | out of 72h scope |
 

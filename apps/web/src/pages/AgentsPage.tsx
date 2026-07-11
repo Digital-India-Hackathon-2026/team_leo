@@ -16,6 +16,27 @@ export default function AgentsPage({ onSelectAgent }: AgentsPageProps) {
   const [building, setBuilding] = useState(false);
   const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
   const [deletingName, setDeletingName] = useState<string | null>(null);
+  const [testingName, setTestingName] = useState<string | null>(null);
+
+  // Optional per-agent delivery (Discord/Telegram/email) — creds stay server-side.
+  const [deliveryChannel, setDeliveryChannel] = useState<"" | "discord" | "telegram" | "email">("");
+  const [dcfg, setDcfg] = useState<Record<string, string>>({});
+  const setField = (k: string, v: string) => setDcfg((p) => ({ ...p, [k]: v }));
+
+  function buildDelivery(): Record<string, string> | undefined {
+    if (deliveryChannel === "discord" && dcfg.webhookUrl?.trim())
+      return { channel: "discord", webhookUrl: dcfg.webhookUrl.trim() };
+    if (deliveryChannel === "telegram" && dcfg.botToken?.trim() && dcfg.chatId?.trim())
+      return { channel: "telegram", botToken: dcfg.botToken.trim(), chatId: dcfg.chatId.trim() };
+    if (deliveryChannel === "email" && dcfg.to?.trim())
+      return {
+        channel: "email",
+        to: dcfg.to.trim(),
+        ...(dcfg.smtpUser?.trim() ? { smtpUser: dcfg.smtpUser.trim() } : {}),
+        ...(dcfg.smtpPass ? { smtpPass: dcfg.smtpPass } : {}),
+      };
+    return undefined;
+  }
 
   useEffect(() => {
     fetchAgents();
@@ -26,9 +47,7 @@ export default function AgentsPage({ onSelectAgent }: AgentsPageProps) {
       const res = await fetch("/api/agents");
       if (!res.ok) throw new Error("Failed to fetch agents");
       const data: { agent: AgentDefinition; path: string }[] = await res.json();
-      // Filter out agents the user has "deleted" (hidden via localStorage)
-      const hidden: string[] = JSON.parse(localStorage.getItem("hidden-agents") ?? "[]");
-      setAgents(data.filter((a) => !hidden.includes(a.agent.name)));
+      setAgents(data);
     } catch {
       setError("Could not load agents. Backend might not be ready.");
     } finally {
@@ -41,34 +60,58 @@ export default function AgentsPage({ onSelectAgent }: AgentsPageProps) {
     setBuilding(true);
     setError("");
     try {
+      const delivery = buildDelivery();
       const res = await fetch("/api/agents", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: prompt.trim() }),
+        body: JSON.stringify({ prompt: prompt.trim(), ...(delivery ? { delivery } : {}) }),
       });
-      if (!res.ok) throw new Error("Failed to build agent");
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? "Failed to build agent");
+      }
       const data: CreateAgentResponse = await res.json();
       setAgents((prev) => [data, ...prev]);
       setPrompt("");
-    } catch {
-      setError("Failed to build agent from prompt.");
+      setDeliveryChannel("");
+      setDcfg({});
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to build agent from prompt.");
     } finally {
       setBuilding(false);
     }
   }
 
-  async function deleteAgent(name: string) {
-    setDeletingName(name);
+  async function testDelivery(name: string) {
+    setTestingName(name);
+    setError("");
     try {
-      // Best-effort: try server delete (may not exist yet)
-      await fetch(`/api/agents/${encodeURIComponent(name)}`, { method: "DELETE" }).catch(() => {});
-      // Always hide locally + persist in localStorage so it survives refreshes
-      setAgents((prev) => prev.filter((a) => a.agent.name !== name));
-      const hidden: string[] = JSON.parse(localStorage.getItem("hidden-agents") ?? "[]");
-      if (!hidden.includes(name)) {
-        hidden.push(name);
-        localStorage.setItem("hidden-agents", JSON.stringify(hidden));
+      const res = await fetch(`/api/agents/${encodeURIComponent(name)}/test-delivery`, { method: "POST" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `server responded ${res.status}`);
       }
+      alert(`✅ Test message sent for "${name}".`);
+    } catch (e) {
+      setError(`Test delivery failed for "${name}": ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setTestingName(null);
+    }
+  }
+
+  async function deleteAgent(name: string) {
+    if (!confirm(`Delete agent "${name}"? This removes its definition file.`)) return;
+    setDeletingName(name);
+    setError("");
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(name)}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `server responded ${res.status}`);
+      }
+      setAgents((prev) => prev.filter((a) => a.agent.name !== name));
+    } catch (e) {
+      setError(`Could not delete "${name}": ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setDeletingName(null);
     }
@@ -105,6 +148,77 @@ export default function AgentsPage({ onSelectAgent }: AgentsPageProps) {
             rows={3}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); buildAgent(); } }}
           />
+          <div className="agent-delivery">
+            <label className="agent-delivery-label">
+              📣 Deliver output to (optional — for scheduled agents):
+            </label>
+            <select
+              className="agent-delivery-select"
+              value={deliveryChannel}
+              onChange={(e) => {
+                setDeliveryChannel(e.target.value as typeof deliveryChannel);
+                setDcfg({});
+              }}
+            >
+              <option value="">No delivery (chat only)</option>
+              <option value="discord">Discord (webhook)</option>
+              <option value="telegram">Telegram (bot)</option>
+              <option value="email">Email</option>
+            </select>
+            {deliveryChannel === "discord" && (
+              <input
+                className="agent-delivery-input"
+                placeholder="Discord webhook URL (https://discord.com/api/webhooks/…)"
+                value={dcfg.webhookUrl ?? ""}
+                onChange={(e) => setField("webhookUrl", e.target.value)}
+              />
+            )}
+            {deliveryChannel === "telegram" && (
+              <>
+                <input
+                  className="agent-delivery-input"
+                  placeholder="Bot token (from @BotFather)"
+                  value={dcfg.botToken ?? ""}
+                  onChange={(e) => setField("botToken", e.target.value)}
+                />
+                <input
+                  className="agent-delivery-input"
+                  placeholder="Chat ID (numeric or @channelname)"
+                  value={dcfg.chatId ?? ""}
+                  onChange={(e) => setField("chatId", e.target.value)}
+                />
+              </>
+            )}
+            {deliveryChannel === "email" && (
+              <>
+                <input
+                  className="agent-delivery-input"
+                  placeholder="Recipient email"
+                  value={dcfg.to ?? ""}
+                  onChange={(e) => setField("to", e.target.value)}
+                />
+                <input
+                  className="agent-delivery-input"
+                  placeholder="SMTP user (optional — else server EMAIL_USER)"
+                  value={dcfg.smtpUser ?? ""}
+                  onChange={(e) => setField("smtpUser", e.target.value)}
+                />
+                <input
+                  className="agent-delivery-input"
+                  type="password"
+                  placeholder="SMTP app password (optional)"
+                  value={dcfg.smtpPass ?? ""}
+                  onChange={(e) => setField("smtpPass", e.target.value)}
+                />
+              </>
+            )}
+            {deliveryChannel && (
+              <p className="agent-delivery-hint">
+                Tip: add a schedule in your prompt (e.g. “every morning at 8am”) so it delivers automatically.
+                Credentials are stored on the server only and never shown again.
+              </p>
+            )}
+          </div>
           <button className="agent-build-btn" onClick={buildAgent} disabled={building || !prompt.trim()}>
             {building ? "⚙ Building…" : "✨ Build Agent"}
           </button>
@@ -158,6 +272,12 @@ export default function AgentsPage({ onSelectAgent }: AgentsPageProps) {
                       <span>Schedule:</span> {agent.schedule}
                     </div>
                   )}
+                  {agent.delivery && (
+                    <div className="agent-stat">
+                      <span>Delivers to:</span> {agent.delivery.channel}
+                      {agent.delivery.target ? ` (${agent.delivery.target})` : ""}
+                    </div>
+                  )}
                 </div>
                 {agent.systemPrompt && (
                   <div className="agent-prompt-section">
@@ -174,6 +294,15 @@ export default function AgentsPage({ onSelectAgent }: AgentsPageProps) {
                 )}
                 <div className="agent-card-actions">
                   <span className="agent-path" title={path}>📁 {path.split(/[\\/]/).pop()}</span>
+                  {agent.delivery && (
+                    <button
+                      className="agent-select-btn"
+                      onClick={() => testDelivery(agent.name)}
+                      disabled={testingName === agent.name}
+                    >
+                      {testingName === agent.name ? "…" : "📨 Test delivery"}
+                    </button>
+                  )}
                   <button className="agent-select-btn" onClick={() => selectAgent(agent)}>
                     💬 Chat with Agent
                   </button>

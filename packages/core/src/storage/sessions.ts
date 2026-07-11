@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Mode, Session, SessionMeta, TokenUsage } from "@personacode/contracts";
+import type { LanguageCode, Mode, Session, SessionMeta, TokenUsage } from "@personacode/contracts";
 
 /**
  * File-per-session JSON store under .personacode/data/sessions/.
@@ -22,7 +22,7 @@ export class SessionStore {
     return join(this.dir, `${id}.json`);
   }
 
-  create(init: { title?: string; model: string; mode?: Mode }): Session {
+  create(init: { title?: string; model: string; mode?: Mode; language?: LanguageCode; terse?: boolean }): Session {
     const now = Date.now();
     const session: Session = {
       id: randomUUID(),
@@ -31,6 +31,8 @@ export class SessionStore {
       updatedAt: now,
       model: init.model,
       mode: init.mode ?? "default",
+      language: init.language,
+      terse: init.terse,
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       messages: [],
     };

@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import type { UIMessage } from "ai";
-import type { Mode } from "@personacode/contracts";
-import { MODE_LABELS } from "@personacode/contracts";
+import type { LanguageCode, ModelInfo, Mode } from "@personacode/contracts";
+import { LANGUAGE_LABELS, MODE_LABELS } from "@personacode/contracts";
 import { contextWindowFor, defaultModelRef } from "@personacode/core";
 import {
   createSession,
@@ -15,6 +15,9 @@ import {
   getSkills,
   getHooks,
   createAgent,
+  getAgents,
+  deleteAgent,
+  getModels,
   runSetupScout,
   getUsage,
   respondPermission,
@@ -23,6 +26,35 @@ import {
 } from "./api.js";
 
 const MODES: Mode[] = ["default", "auto", "plan", "edit"];
+
+interface Cmd {
+  name: string;
+  args?: string;
+  desc: string;
+}
+/** Slash commands for the autocomplete menu (shown as you type `/`). */
+const COMMANDS: Cmd[] = [
+  { name: "init", desc: "scan project → write PERSONA.md" },
+  { name: "setup", args: "[apply]", desc: "Setup Scout: recommend MCP / skills / PERSONA.md" },
+  { name: "agent", args: 'new "…" | use "…" | delete "…" | off', desc: "build, select, or delete a custom agent" },
+  { name: "research", args: "[on|off]", desc: "Deep Research starter agent" },
+  { name: "lang", args: "<code|off>", desc: "Bharat Mode response language" },
+  { name: "terse", args: "[on|off]", desc: "minimal-token responses" },
+  { name: "memory", desc: "list recalled memory" },
+  { name: "skills", desc: "list skills" },
+  { name: "mcp", desc: "list MCP servers" },
+  { name: "hooks", desc: "list hooks.json hooks" },
+  { name: "rewind", args: "[n]", desc: "list / restore checkpoints" },
+  { name: "usage", desc: "token usage this session" },
+  { name: "compact", desc: "compaction status" },
+  { name: "crew", args: "[on|off]", desc: "⚡ Model Crew orchestration" },
+  { name: "pav", args: "[on|off]", desc: "⚙ Plan → Apply → Verify loop" },
+  { name: "mode", args: "<m>", desc: "default | auto | plan | edit" },
+  { name: "model", args: "<ref>", desc: "set the model" },
+  { name: "connect", desc: "how to add a provider key" },
+  { name: "help", desc: "list all commands" },
+  { name: "exit", desc: "quit Personacode" },
+];
 
 /** 648 → "648", 12_345 → "12.3k", 1_048_576 → "1M". */
 function fmtNum(n: number): string {
@@ -46,11 +78,16 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [history, setHistory] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
+  const [inputKey, setInputKey] = useState(0); // bump to remount TextInput → cursor jumps to end
+  const [selected, setSelected] = useState(0); // highlighted autocomplete suggestion
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const [mode, setMode] = useState<Mode>("default");
   const [busy, setBusy] = useState(false);
   const [crew, setCrew] = useState(false);
   const [pav, setPav] = useState(false);
   const [agentName, setAgentName] = useState<string | undefined>();
+  const [language, setLanguage] = useState<LanguageCode | undefined>();
+  const [terse, setTerse] = useState(false);
   const [tokens, setTokens] = useState(0);
   const [sessionId, setSessionId] = useState<string | undefined>();
   const abortRef = useRef<AbortController | null>(null);
@@ -64,13 +101,43 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
     }
   });
 
+  // Slash-command autocomplete: show a filtered menu while typing `/name` (no space yet).
+  const slashQuery = !busy && input.startsWith("/") && !input.includes(" ") ? input.slice(1).toLowerCase() : null;
+  const commandSuggestions = slashQuery !== null ? COMMANDS.filter((c) => c.name.startsWith(slashQuery)) : [];
+
+  // Model autocomplete: after `/model ` show matching models, grouped by provider.
+  const modelMatch = !busy ? input.match(/^\/model\s+(.*)$/s) : null;
+  const modelQuery = modelMatch ? modelMatch[1]!.toLowerCase().trim() : null;
+  const modelSuggestions =
+    modelQuery !== null ? models.filter((m) => m.ref.toLowerCase().includes(modelQuery)) : [];
+
+  // Exactly one menu is active at a time (input shape is mutually exclusive).
+  const menuKind: "command" | "model" | null = commandSuggestions.length
+    ? "command"
+    : modelSuggestions.length
+      ? "model"
+      : null;
+  const menuLen = menuKind === "command" ? commandSuggestions.length : modelSuggestions.length;
+  const sel = menuLen ? Math.min(selected, menuLen - 1) : 0;
+  const MENU_WINDOW = 8;
+  // Scrolling window that always keeps the highlighted row visible.
+  const winStart = Math.max(0, Math.min(sel - MENU_WINDOW + 1, menuLen - MENU_WINDOW));
+
   // Create a server-backed session on mount (enables context/checkpoints/usage).
   useEffect(() => {
-    createSession(base, { mode, model: model.startsWith("(") ? undefined : model })
+    createSession(base, { mode, model: model.startsWith("(") ? undefined : model, language, terse })
       .then(setSessionId)
       .catch(() => sys("could not create a session — is the server up? (pnpm dev)"));
+    getModels(base).then(setModels).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** Set input text and jump the cursor to the end (remount forces cursorOffset=length). */
+  function setInputEnd(v: string) {
+    setInput(v);
+    setInputKey((k) => k + 1);
+    setSelected(0);
+  }
 
   const sys = (text: string) => setLines((l) => [...l, { role: "system", text }]);
 
@@ -97,6 +164,17 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
       abortRef.current?.abort();
       sys("⎋ interrupted");
     }
+    // Autocomplete menu navigation (ink-text-input ignores Tab / ↑ / ↓, so these are free).
+    if (menuLen > 0) {
+      if (key.downArrow) return void setSelected((s) => (Math.min(s, menuLen - 1) + 1) % menuLen);
+      if (key.upArrow) return void setSelected((s) => (Math.min(s, menuLen - 1) - 1 + menuLen) % menuLen);
+      if (key.tab && !key.shift) {
+        if (menuKind === "command") setInputEnd(`/${commandSuggestions[sel].name} `);
+        else setInputEnd(`/model ${modelSuggestions[sel].ref}`);
+        return;
+      }
+      if (key.escape) return void setInput("");
+    }
     if (key.tab && key.shift) setMode((m) => MODES[(MODES.indexOf(m) + 1) % MODES.length]);
   });
 
@@ -115,9 +193,32 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         else sys(`modes: ${MODES.join(", ")} (current: ${mode})`);
         return;
       case "model":
-        if (args[0]) setModel(args[0]);
-        else sys(`model: ${model}`);
+        if (args[0]) {
+          setModel(args[0]);
+          sys(`model → ${args[0]}`);
+        } else {
+          sys(`model: ${model} · type "/model " then a name to pick (↑/↓, grouped by provider)`);
+        }
         return;
+      case "lang": {
+        const code = args[0]?.toLowerCase();
+        if (code === "off" || code === "none") {
+          setLanguage(undefined);
+          sys("Bharat Mode language off");
+        } else if (code && code in LANGUAGE_LABELS) {
+          setLanguage(code as LanguageCode);
+          sys(`Bharat Mode: ${LANGUAGE_LABELS[code as LanguageCode]} (${code})`);
+        } else {
+          sys(`language: ${language ? `${LANGUAGE_LABELS[language]} (${language})` : "off"} · codes: ${Object.keys(LANGUAGE_LABELS).join(", ")}`);
+        }
+        return;
+      }
+      case "terse": {
+        const on = args[0] ? args[0] === "on" : !terse;
+        setTerse(on);
+        sys(`Terse Mode ${on ? "ON — shortest complete responses" : "off"}`);
+        return;
+      }
       case "connect":
         sys("Add a free key to .env (GOOGLE_/GROQ_/CEREBRAS_…) then restart, or set PERSONACODE_MOCK=1. Web /connect UI is richer.");
         return;
@@ -186,10 +287,31 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         return;
       }
       case "agent": {
-        if (!rawArgs) return sys(`agent: ${agentName ?? "(none)"} · use /agent new, /agent use <name>, or /agent off`);
+        if (!rawArgs) {
+          try {
+            const agents = await getAgents(base);
+            sys(`agent: ${agentName ?? "(none)"}`);
+            agents.forEach(({ agent }) => sys(`  • ${agent.name} — ${agent.description}`));
+          } catch {
+            sys("agents: (server unreachable)");
+          }
+          return;
+        }
         if (rawArgs === "off") {
           setAgentName(undefined);
           sys("custom agent off");
+          return;
+        }
+        const deleteMatch = rawArgs.match(/^(?:delete|rm|remove)(?:\s+)([\s\S]+)$/);
+        if (deleteMatch) {
+          const target = deleteMatch[1]!.trim().replace(/^(["'])(.*)\1$/, "$2");
+          try {
+            await deleteAgent(base, target);
+            if (agentName && agentName.toLowerCase() === target.toLowerCase()) setAgentName(undefined);
+            sys(`agent deleted: ${target}`);
+          } catch (error) {
+            sys(`delete failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
           return;
         }
         const useMatch = rawArgs.match(/^use(?:\s+)([\s\S]+)$/);
@@ -200,7 +322,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
           return;
         }
         const match = rawArgs.match(/^new(?:\s+)([\s\S]+)$/);
-        if (!match) return sys('usage: /agent new "prompt" · /agent use "name" · /agent off');
+        if (!match) return sys('usage: /agent new "prompt" · /agent use "name" · /agent delete "name" · /agent off');
         let prompt = match[1]!.trim();
         if ((prompt.startsWith('"') && prompt.endsWith('"')) || (prompt.startsWith("'") && prompt.endsWith("'"))) {
           prompt = prompt.slice(1, -1).trim();
@@ -213,6 +335,12 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         } catch (error) {
           sys(`agent creation failed: ${error instanceof Error ? error.message : String(error)}`);
         }
+        return;
+      }
+      case "research": {
+        const on = args[0] ? args[0] === "on" : agentName !== "Deep Research";
+        setAgentName(on ? "Deep Research" : undefined);
+        sys(`Deep Research ${on ? "ON — iterative web search with citations" : "off"}`);
         return;
       }
       case "rewind": {
@@ -254,7 +382,7 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         return;
       }
       case "help":
-        sys('/init /setup [apply] /agent new "prompt" /memory /skills /mcp /hooks /rewind [n] /usage /compact /crew [on|off] /pav [on|off] /mode <m> /model <ref> /connect /exit · Shift+Tab cycles modes · Esc interrupts');
+        sys('/init /setup [apply] /agent new|use|delete|off /research [on|off] /lang <code|off> /terse [on|off] /memory /skills /mcp /hooks /rewind [n] /usage /compact /crew [on|off] /pav [on|off] /mode <m> /model <ref> /connect /exit · Shift+Tab cycles modes · Esc interrupts');
         return;
       default:
         sys(`Unknown command: /${name}`);
@@ -284,6 +412,8 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
           model: agentName || model.startsWith("(") ? undefined : model,
           mode: agentName ? undefined : mode,
           agent: agentName,
+          language: language ?? null,
+          terse,
           orchestrate: crew,
           pav,
           approvals: true,
@@ -300,8 +430,14 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
               }
               return copy;
             }),
-          onFallback: (from, to) => sys(`⇄ fallback: ${from} → ${to}`),
-          onOrchestration: (s) => sys(`⚡ ${s.stage} ${s.model} — ${s.detail} · ${(s.ms / 1000).toFixed(1)}s`),
+          onFallback: (from, to) => {
+            sys(`⇄ fallback: ${from} → ${to}`);
+            setModel(to); // reflect the model that actually answered in the statusline
+          },
+          onOrchestration: (s) => {
+            if (s.stage === "route") setModel(s.model);
+            sys(`⚡ ${s.stage} ${s.model} — ${s.detail} · ${(s.ms / 1000).toFixed(1)}s`);
+          },
           onPav: (s) =>
             sys(
               `⚙ PAV ${s.phase}${s.iteration ? ` #${s.iteration}` : ""} — ${s.detail}` +
@@ -371,7 +507,75 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
       ) : (
         <Box borderStyle="round" borderColor={mode === "auto" ? "yellow" : "gray"} paddingX={1}>
           <Text color="magentaBright">❯ </Text>
-          <TextInput value={input} onChange={setInput} onSubmit={(v) => submit(v)} placeholder="Message… (/help)" />
+          <TextInput
+            key={inputKey}
+            value={input}
+            onChange={(v) => {
+              setInput(v);
+              setSelected(0);
+            }}
+            onSubmit={(v) => {
+              // Enter with a menu open acts on the highlighted row.
+              if (menuKind === "command") {
+                const name = commandSuggestions[sel].name;
+                setInput("");
+                setSelected(0);
+                void handleCommand(`/${name}`);
+                return;
+              }
+              if (menuKind === "model") {
+                const ref = modelSuggestions[sel].ref;
+                setInput("");
+                setSelected(0);
+                setModel(ref);
+                sys(`model → ${ref}`);
+                return;
+              }
+              submit(v);
+            }}
+            placeholder="Message…  (type / for commands)"
+          />
+        </Box>
+      )}
+
+      {menuKind === "command" && !pendingPerm && (
+        <Box flexDirection="column" paddingX={1}>
+          {winStart > 0 && <Text dimColor>  ↑ {winStart} more</Text>}
+          {commandSuggestions.slice(winStart, winStart + MENU_WINDOW).map((c, i) => {
+            const idx = winStart + i;
+            return (
+              <Text key={c.name} color={idx === sel ? "magentaBright" : undefined} dimColor={idx !== sel}>
+                {idx === sel ? "❯ " : "  "}/{c.name}
+                {c.args ? ` ${c.args}` : ""}
+                {"  —  "}
+                {c.desc}
+              </Text>
+            );
+          })}
+          {menuLen > winStart + MENU_WINDOW && <Text dimColor>  ↓ {menuLen - winStart - MENU_WINDOW} more</Text>}
+          <Text dimColor>↑/↓ select · Tab complete · Enter run · Esc dismiss</Text>
+        </Box>
+      )}
+
+      {menuKind === "model" && !pendingPerm && (
+        <Box flexDirection="column" paddingX={1}>
+          {winStart > 0 && <Text dimColor>  ↑ {winStart} more</Text>}
+          {modelSuggestions.slice(winStart, winStart + MENU_WINDOW).map((m, i) => {
+            const idx = winStart + i;
+            const prev = idx > 0 ? modelSuggestions[idx - 1] : undefined;
+            const showHeader = !prev || prev.providerId !== m.providerId;
+            return (
+              <Box key={m.ref} flexDirection="column">
+                {showHeader && <Text color="cyanBright" bold>{m.providerId}</Text>}
+                <Text color={idx === sel ? "magentaBright" : undefined} dimColor={idx !== sel}>
+                  {idx === sel ? "  ❯ " : "    "}{m.modelId}
+                  {m.contextWindow ? <Text dimColor>{`  (${fmtNum(m.contextWindow)} ctx)`}</Text> : null}
+                </Text>
+              </Box>
+            );
+          })}
+          {menuLen > winStart + MENU_WINDOW && <Text dimColor>  ↓ {menuLen - winStart - MENU_WINDOW} more</Text>}
+          <Text dimColor>↑/↓ select · Tab fill · Enter set model · Esc dismiss</Text>
         </Box>
       )}
 
@@ -381,6 +585,8 @@ export default function App({ base, mock }: { base: string; mock: boolean }) {
         {crew && <Text color="magentaBright">⚡ Crew</Text>}
         {pav && <Text color="greenBright">⚙ PAV</Text>}
         {agentName && <Text color="cyanBright">agent: {agentName}</Text>}
+        {language && <Text color="cyan">BHARAT {language.toUpperCase()}</Text>}
+        {terse && <Text color="yellow">TERSE</Text>}
         <Text dimColor>
           {fmtNum(tokens)}
           {ctxWindow > 0 ? `/${fmtNum(ctxWindow)} · ${ctxPct.toFixed(ctxPct < 10 ? 1 : 0)}%` : " tok"}

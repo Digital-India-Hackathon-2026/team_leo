@@ -1,19 +1,22 @@
 import { convertToModelMessages, createUIMessageStream, generateText } from "ai";
 import type { ToolSet, UIMessage, UIMessageChunk } from "ai";
-import type { Mode } from "@personacode/contracts";
+import type { LanguageCode, Mode } from "@personacode/contracts";
 import { buildTools } from "../tools/index.js";
 import { compactConversation, shouldCompact } from "./compaction.js";
 import { runScout } from "./scout.js";
 import { runFinishHooks } from "../hooks/index.js";
 import { captureReviewBaseline, reviewAgentResult } from "./reviewer.js";
+import { routeAutoTask } from "./router.js";
 import { defaultModelRef, fallbackChain, getModel, setCooldown } from "../providers/registry.js";
 import {
   MODE_HINTS,
   SYSTEM_PROMPT,
+  TERSE_SYSTEM_PROMPT,
   lastUserText,
   providerOf,
   pumpTurn,
   shouldFallback,
+  responseDirectives,
   type AgentTurnResult,
 } from "./turn.js";
 
@@ -31,6 +34,10 @@ export interface AgentRunOptions {
   autoCompact?: boolean;
   /** Model Crew: run the scout→brief pipeline before the brain turn (opt-in). */
   orchestrate?: boolean;
+  /** Bharat Mode response language. */
+  language?: LanguageCode;
+  /** Terse Mode response compression. */
+  terse?: boolean;
   /**
    * Permission approval channel for side-effecting tools in Default mode. The host
    * resolves each request id with a decision; core emits a `data-permission-request`
@@ -56,11 +63,31 @@ export interface AgentRunOptions {
 export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChunk> {
   const mode: Mode = opts.mode ?? "default";
   const cwd = opts.cwd ?? process.cwd();
-  const primary = opts.modelRef ?? defaultModelRef();
 
   return createUIMessageStream({
     execute: async ({ writer }) => {
       let modelMessages = await convertToModelMessages(opts.messages);
+      let primary = opts.modelRef ?? defaultModelRef();
+      let routingPreset = "";
+      let routeUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+
+      if (mode === "auto") {
+        const route = await routeAutoTask(lastUserText(opts.messages));
+        primary = route.model;
+        routingPreset = `\n\n${route.preset}`;
+        routeUsage = route.usage;
+        writer.write({
+          type: "data-orchestration",
+          data: {
+            stage: "route",
+            model: route.model,
+            ms: route.ms,
+            detail: `${route.kind}: ${route.reason}`,
+            kind: route.kind,
+            mode: route.mode,
+          },
+        } as unknown as UIMessageChunk);
+      }
 
       // Build the tool-approval gate: emit a request chunk, await the host's decision.
       // "always" auto-approves that tool for the remainder of this turn.
@@ -119,11 +146,13 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
       }
 
       const baseSystem =
-        SYSTEM_PROMPT +
+        (opts.terse ? TERSE_SYSTEM_PROMPT : SYSTEM_PROMPT) +
         MODE_HINTS[mode] +
         (opts.system ? `\n${opts.system}` : "") +
         (compactionBrief ? `\n\n${compactionBrief}` : "") +
-        orchestrationBrief;
+        orchestrationBrief +
+        routingPreset +
+        responseDirectives(opts.language, opts.terse);
       const tools: ToolSet = {
         ...buildTools({ mode, cwd, disabled: new Set(opts.disabledTools ?? []), requestApproval }),
         ...(opts.extraTools ?? {}),
@@ -144,6 +173,9 @@ export function runAgentTurn(opts: AgentRunOptions): ReadableStream<UIMessageChu
         return;
       }
       if (result) {
+        result.usage.inputTokens += routeUsage.inputTokens;
+        result.usage.outputTokens += routeUsage.outputTokens;
+        result.usage.totalTokens += routeUsage.totalTokens;
         if (crewActive) {
           const review = await reviewAgentResult({
             cwd,

@@ -2,6 +2,7 @@ import { tool } from "ai";
 import { createTransport } from "nodemailer";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
+import { SafeSearchType, search } from "duck-duck-scrape";
 import type { ToolSet } from "ai";
 import { z } from "zod";
 import { exec } from "node:child_process";
@@ -15,6 +16,8 @@ import { request as httpsRequest } from "node:https";
 import type { Mode } from "@personacode/contracts";
 import { runToolHooks } from "../hooks/index.js";
 import { resolveWorkspacePath } from "../security/paths.js";
+import { isMockMode } from "../providers/registry.js";
+import { getDiagnostics } from "../lsp/index.js";
 
 const execAsync = promisify(exec);
 
@@ -41,6 +44,12 @@ export interface ToolPolicy {
    * user y/n/always; absent (CLI in-process, tests) means auto-allow.
    */
   requestApproval?: (info: { tool: string; input: unknown }) => Promise<boolean>;
+  /**
+   * Called with the workspace-relative path after every successful write_file. Lets the
+   * host (e.g. the PAV loop) track which files an Apply pass touched so it can run
+   * language-server diagnostics on exactly those files.
+   */
+  onFileWrite?: (relPath: string) => void;
 }
 
 /** Side-effecting tools that require confirmation in Default mode. */
@@ -149,9 +158,39 @@ async function approve(policy: ToolPolicy, tool: string, input: unknown): Promis
 /** Mode → what's allowed. Plan: read-only. Edit: files but no shell. Auto/default: all. */
 function allowed(policy: ToolPolicy, toolName: string): boolean {
   if (policy.disabled.has(toolName)) return false;
-  if (policy.mode === "plan") return ["read_file", "list_files", "web_fetch"].includes(toolName);
-  if (policy.mode === "edit") return toolName !== "bash";
+  if (policy.mode === "plan") return ["read_file", "list_files", "web_fetch", "web_search", "lsp_diagnostics"].includes(toolName);
+  if (policy.mode === "edit") return ["read_file", "write_file", "list_files", "lsp_diagnostics"].includes(toolName);
   return true;
+}
+
+async function webSearch(query: string, maxResults: number): Promise<string> {
+  if (isMockMode()) {
+    return [
+      `1. Mock primary source for ${query}\n   https://example.com/primary\n   Deterministic mock search result for offline testing.`,
+      `2. Mock reference for ${query}\n   https://example.org/reference\n   A second source for citation and comparison.`,
+    ].slice(0, maxResults).join("\n\n");
+  }
+  const response = await Promise.race([
+    search(query, { safeSearch: SafeSearchType.MODERATE }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("search timed out")), 15_000)),
+  ]);
+  const seen = new Set<string>();
+  const rows: string[] = [];
+  for (const result of response.results) {
+    if (rows.length >= maxResults || seen.has(result.url)) continue;
+    let url: URL;
+    try {
+      url = new URL(result.url);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+    seen.add(result.url);
+    const title = result.title.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+    const snippet = result.description.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+    rows.push(`${rows.length + 1}. ${title}\n   ${result.url}\n   ${snippet}`);
+  }
+  return diet(rows.join("\n\n") || "No search results found.");
 }
 
 async function smtpSend(to: string, subject: string, body: string): Promise<string> {
@@ -279,6 +318,7 @@ export function buildTools(policy: ToolPolicy): ToolSet {
           const full = await resolveWorkspacePath(policy.cwd, path, { write: true });
           await mkdir(dirname(full), { recursive: true });
           await writeFile(full, content, "utf8");
+          policy.onFileWrite?.(path.replace(/\\/g, "/"));
           return `Wrote ${content.length} chars to ${path}`;
         }),
     }),
@@ -307,6 +347,28 @@ export function buildTools(policy: ToolPolicy): ToolSet {
             .replace(/\s+/g, " ");
           return diet(stripped);
         }),
+    }),
+
+    web_search: tool({
+      description: "Search the public web without an API key. Returns titles, URLs, and snippets; use web_fetch to read a result.",
+      inputSchema: z.object({
+        query: z.string().trim().min(1).max(500),
+        maxResults: z.number().int().min(1).max(10).default(5),
+      }),
+      execute: ({ query, maxResults }) =>
+        executeTool(policy, "web_search", { query, maxResults }, () => webSearch(query, maxResults)),
+    }),
+
+    lsp_diagnostics: tool({
+      description:
+        "Report language-server diagnostics (type errors, undefined symbols, unused vars) for one or more files. " +
+        "Uses an installed language server (typescript-language-server, pyright, gopls, rust-analyzer, clangd, …) when present; " +
+        "call this after editing a file to verify your changes are error-free before finishing.",
+      inputSchema: z.object({
+        paths: z.array(z.string()).min(1).max(20).describe("Workspace-relative file paths to check"),
+      }),
+      execute: ({ paths }) =>
+        executeTool(policy, "lsp_diagnostics", { paths }, async () => diet((await getDiagnostics(policy.cwd, paths)).text)),
     }),
 
     send_email: tool({
@@ -341,4 +403,4 @@ export function buildTools(policy: ToolPolicy): ToolSet {
 }
 
 export type BuiltinToolName = keyof ReturnType<typeof buildTools>;
-export const BUILTIN_TOOL_NAMES = ["bash", "read_file", "write_file", "list_files", "web_fetch", "send_email", "read_emails"] as const;
+export const BUILTIN_TOOL_NAMES = ["bash", "read_file", "write_file", "list_files", "web_fetch", "web_search", "lsp_diagnostics", "send_email", "read_emails"] as const;

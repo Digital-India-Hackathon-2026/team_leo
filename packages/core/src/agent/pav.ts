@@ -2,19 +2,22 @@ import { convertToModelMessages, createUIMessageStream } from "ai";
 import type { ToolSet, UIMessage, UIMessageChunk } from "ai";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { TokenUsage } from "@personacode/contracts";
+import type { LanguageCode, TokenUsage } from "@personacode/contracts";
 import { buildTools } from "../tools/index.js";
 import { defaultModelRef, isMockMode } from "../providers/registry.js";
 import { modelForRole } from "../providers/roles.js";
 import { runFinishHooks } from "../hooks/index.js";
 import { generateWithFallback } from "./loop.js";
 import { detectVerifyCommands, runVerify } from "./verify.js";
+import { getDiagnostics } from "../lsp/index.js";
 import { captureReviewBaseline, reviewAgentResult } from "./reviewer.js";
 import {
   MODE_HINTS,
   SYSTEM_PROMPT,
+  TERSE_SYSTEM_PROMPT,
   lastUserText,
   pumpTurn,
+  responseDirectives,
   type AgentTurnResult,
 } from "./turn.js";
 
@@ -39,6 +42,8 @@ export interface PavRunOptions {
   disabledTools?: string[];
   /** Injected project context (PERSONA.md + memory + skills), same as a normal turn. */
   system?: string;
+  language?: LanguageCode;
+  terse?: boolean;
   /** Max Apply→Verify iterations before giving up (default 3, env PERSONACODE_PAV_MAX_ITER). */
   maxIterations?: number;
   onFinishTurn?: (r: AgentTurnResult) => void | Promise<void>;
@@ -60,14 +65,15 @@ export interface PavStage {
   output?: string;
 }
 
-const planPrompt = (task: string): string =>
+const planPrompt = (task: string, language?: LanguageCode, terse = false): string =>
   `You are the PLANNER in a Plan→Apply→Verify loop for a coding task on the user's local repository.\n\n` +
   `TASK: ${task}\n\n` +
   `Write a concise, concrete implementation plan in Markdown:\n` +
   `- "## Goal" — one line.\n` +
   `- "## Steps" — a short numbered list of specific edits (which file, what change). Minimum set of steps.\n` +
   `- "## Verification" — what a passing result looks like (the loop runs the repo's own typecheck/test scripts).\n\n` +
-  `Do NOT write the code yet — just the plan. Be terse.`;
+  `Do NOT write the code yet — just the plan. Be terse.` +
+  responseDirectives(language, terse);
 
 const mockPlan = (task: string): string =>
   `## Goal\n${task || "Make the requested change"}.\n\n` +
@@ -123,7 +129,7 @@ export function runPavLoop(opts: PavRunOptions): ReadableStream<UIMessageChunk> 
         planModel = "mock/mock-1";
       } else {
         try {
-          const r = await generateWithFallback(planPrompt(task), modelForRole("brain"));
+          const r = await generateWithFallback(planPrompt(task, opts.language, opts.terse), modelForRole("brain"));
           planMarkdown = r.text.trim() || "(planner returned no plan)";
           planModel = r.model;
           addUsage(r.usage);
@@ -139,9 +145,17 @@ export function runPavLoop(opts: PavRunOptions): ReadableStream<UIMessageChunk> 
 
       // ---------- APPLY → VERIFY loop ----------
       const verifyCmds = isMockMode() ? [] : detectVerifyCommands(cwd);
+      // Files the Apply pass writes each iteration — fed to the language server for
+      // per-file diagnostics before the (slower) whole-repo verify runs.
+      const editedFiles = new Set<string>();
       // EDIT mode: the Apply pass may write files but cannot run shell commands.
       const tools: ToolSet = {
-        ...buildTools({ mode: "edit", cwd, disabled: new Set(opts.disabledTools ?? []) }),
+        ...buildTools({
+          mode: "edit",
+          cwd,
+          disabled: new Set(opts.disabledTools ?? []),
+          onFileWrite: (p) => editedFiles.add(p),
+        }),
         ...(opts.extraTools ?? {}),
       };
 
@@ -151,16 +165,18 @@ export function runPavLoop(opts: PavRunOptions): ReadableStream<UIMessageChunk> 
 
       for (let i = 0; i < maxIter; i++) {
         runs = i + 1;
+        editedFiles.clear();
 
         // APPLY
         const applyStart = Date.now();
         emit({ phase: "apply", iteration: runs, detail: i === 0 ? "executing the plan" : "fixing verification failures" });
         const applySystem =
-          SYSTEM_PROMPT +
+          (opts.terse ? TERSE_SYSTEM_PROMPT : SYSTEM_PROMPT) +
           MODE_HINTS.edit +
           (opts.system ? `\n${opts.system}` : "") +
           `\n\nYou are in the APPLY phase of a Plan→Apply→Verify loop. Execute this approved plan now by editing files with the write_file tool — make the real changes, don't just describe them.\n\nPLAN:\n${planMarkdown}` +
-          attemptLog;
+          attemptLog +
+          responseDirectives(opts.language, opts.terse);
 
         const { result, error } = await pumpTurn({
           writer,
@@ -181,6 +197,38 @@ export function runPavLoop(opts: PavRunOptions): ReadableStream<UIMessageChunk> 
           usedRef = result.modelRef;
         }
         emit({ phase: "apply", iteration: runs, model: usedRef, ms: Date.now() - applyStart, detail: "changes applied" });
+
+        // LSP DIAGNOSTICS — fast per-file check on exactly the files this pass edited,
+        // using an installed language server. If it finds type/syntax errors we feed
+        // them straight back into the next Apply (cheaper + more precise than waiting
+        // for the whole-repo verify). Skipped in mock mode and when no server is present.
+        if (!isMockMode() && editedFiles.size) {
+          const lspStart = Date.now();
+          const report = await getDiagnostics(cwd, [...editedFiles]).catch(() => undefined);
+          if (report && report.errorCount > 0) {
+            emit({
+              phase: "verify",
+              iteration: runs,
+              ms: Date.now() - lspStart,
+              passed: false,
+              detail: `language server found ${report.errorCount} error(s) ✗`,
+              command: "lsp diagnostics",
+              output: report.text,
+            });
+            attemptLog += `\n\nATTEMPT ${runs} — language server diagnostics found errors in the edited files:\n${report.text}\nFix these specific problems in your next edits.`;
+            continue;
+          }
+          if (report && report.ran.length) {
+            emit({
+              phase: "verify",
+              iteration: runs,
+              ms: Date.now() - lspStart,
+              passed: true,
+              detail: "language server: no errors ✓",
+              command: "lsp diagnostics",
+            });
+          }
+        }
 
         // REVIEWER quality gate. It prefers a provider different from the Apply model.
         const review = await reviewAgentResult({

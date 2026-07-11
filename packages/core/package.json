@@ -26,6 +26,7 @@
     "ai": "^7.0.18",
     "imapflow": "^1.4.6",
     "mailparser": "^3.9.14",
+    "duck-duck-scrape": "^2.2.7",
     "node-cron": "^4.2.1",
     "nodemailer": "^9.0.3",
     "zod": "^4.4.3"

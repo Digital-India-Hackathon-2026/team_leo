@@ -7,7 +7,9 @@
     "personacode": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/build-package.mjs",
+    "build:tsc": "tsc -p tsconfig.json",
+    "pack:local": "pnpm build && npm pack ./dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "tsx src/index.tsx",
     "start:mock": "cross-env PERSONACODE_MOCK=1 tsx src/index.tsx"
@@ -22,6 +24,10 @@
     "react": "^19.2.7"
   },
   "devDependencies": {
+    "@personacode/channels": "workspace:*",
+    "@personacode/server": "workspace:*",
+    "@personacode/web": "workspace:*",
+    "esbuild": "^0.27.3",
     "@types/react": "^19.2.17"
   }
 }

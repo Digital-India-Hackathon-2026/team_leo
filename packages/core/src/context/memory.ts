@@ -51,7 +51,7 @@ export async function listMemories(cwd: string): Promise<MemoryFile[]> {
 }
 
 function tokenize(s: string): string[] {
-  return (s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length >= 3 && !STOP.has(w));
+  return (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => w.length >= 2 && !STOP.has(w));
 }
 
 /** Score each memory by keyword overlap with `query`; return top matches (score>0). */
