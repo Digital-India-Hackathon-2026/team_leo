@@ -18,11 +18,11 @@
       "badge": "free",
       "keyUrl": "https://console.groq.com/keys",
       "envVar": "GROQ_API_KEY",
-      "defaultModel": "llama-3.3-70b-versatile",
-      "models": ["llama-3.3-70b-versatile", "qwen/qwen3-32b", "llama-3.1-8b-instant"],
+      "defaultModel": "llama-3.1-8b-instant",
+      "models": ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "qwen/qwen3-32b"],
       "fast": "llama-3.1-8b-instant",
       "quotaNote": "Free: ~30 RPM / daily token caps, no card. Fastest inference — used for quick calls & Auto-mode routing.",
-      "contextWindows": { "llama-3.3-70b-versatile": 131072, "qwen/qwen3-32b": 131072, "llama-3.1-8b-instant": 131072 }
+      "contextWindows": { "llama-3.1-8b-instant": 131072, "llama-3.3-70b-versatile": 131072, "qwen/qwen3-32b": 131072 }
     },
     {
       "id": "cerebras",
