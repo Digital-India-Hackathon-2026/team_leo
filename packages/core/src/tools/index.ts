@@ -1,5 +1,7 @@
 import { tool } from "ai";
 import { createTransport } from "nodemailer";
+import { ImapFlow } from "imapflow";
+import { simpleParser } from "mailparser";
 import type { ToolSet } from "ai";
 import { z } from "zod";
 import { exec } from "node:child_process";
@@ -163,6 +165,52 @@ async function smtpSend(to: string, subject: string, body: string): Promise<stri
   return `Email sent to ${to} with subject "${subject}"`;
 }
 
+async function fetchEmails(opts: { todayOnly: boolean; maxCount: number }): Promise<string> {
+  const user = process.env.EMAIL_USER;
+  const pass = process.env.EMAIL_APP_PASSWORD;
+  const host = process.env.EMAIL_IMAP_HOST ?? "imap.gmail.com";
+  if (!user || !pass) throw new Error("EMAIL_USER and EMAIL_APP_PASSWORD not set in .env");
+
+  const client = new ImapFlow({
+    host, port: 993, secure: true,
+    auth: { user, pass },
+    logger: false,
+  });
+
+  await client.connect();
+  const summaries: string[] = [];
+
+  try {
+    const lock = await client.getMailboxLock("INBOX");
+    try {
+      const since = opts.todayOnly
+        ? new Date(new Date().toDateString()) // midnight local time
+        : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // last 7 days
+
+      const uids: number[] = await client.search({ since }, { uid: true }) as number[];
+      const recent = uids.slice(-opts.maxCount);
+
+      for (const uid of recent) {
+        const msg = await client.fetchOne(uid, { source: true }, { uid: true }) as { source?: Buffer } | null | undefined;
+        if (!msg?.source) continue;
+        const parsed = await simpleParser(msg.source);
+        const from = parsed.from?.text ?? "unknown";
+        const subject = parsed.subject ?? "(no subject)";
+        const date = parsed.date?.toLocaleString() ?? "";
+        const snippet = (parsed.text ?? "").slice(0, 300).replace(/\n+/g, " ").trim();
+        summaries.push(`From: ${from}\nDate: ${date}\nSubject: ${subject}\nPreview: ${snippet}\n`);
+      }
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout();
+  }
+
+  if (summaries.length === 0) return "No emails found for the requested period.";
+  return summaries.join("\n---\n");
+}
+
 async function executeTool<T>(
   policy: ToolPolicy,
   name: string,
@@ -275,8 +323,22 @@ export function buildTools(policy: ToolPolicy): ToolSet {
           smtpSend(to, subject, body)
         ),
     }),
+
+    read_emails: tool({
+      description:
+        "Read emails from the Gmail inbox via IMAP. Use this to fetch, summarize, or list " +
+        "recent or today's emails. Returns sender, date, subject and a short preview for each email.",
+      inputSchema: z.object({
+        today_only: z.boolean().default(true).describe("If true, fetch only today's emails; if false, fetch the last 7 days"),
+        max_count: z.number().int().min(1).max(50).default(20).describe("Maximum number of emails to return"),
+      }),
+      execute: ({ today_only, max_count }) =>
+        executeTool(policy, "read_emails", { today_only, max_count }, () =>
+          fetchEmails({ todayOnly: today_only, maxCount: max_count })
+        ),
+    }),
   };
 }
 
 export type BuiltinToolName = keyof ReturnType<typeof buildTools>;
-export const BUILTIN_TOOL_NAMES = ["bash", "read_file", "write_file", "list_files", "web_fetch", "send_email"] as const;
+export const BUILTIN_TOOL_NAMES = ["bash", "read_file", "write_file", "list_files", "web_fetch", "send_email", "read_emails"] as const;
