@@ -1454,3 +1454,10 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 
 /* scout script chip */
 .scout-chip.script { background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); }
+
+/* per-agent delivery form */
+.agent-delivery { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; background: var(--bg); }
+.agent-delivery-label { font-size: 13px; font-weight: 500; color: var(--dim); }
+.agent-delivery-select, .agent-delivery-input { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: 13px var(--sans); }
+.agent-delivery-select:focus, .agent-delivery-input:focus { outline: none; border-color: var(--accent); }
+.agent-delivery-hint { font-size: 12px; color: var(--faint); line-height: 1.5; }

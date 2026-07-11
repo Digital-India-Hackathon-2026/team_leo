@@ -170,6 +170,20 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // Keep the model picker in sync with the model that actually answered: when a turn
+  // falls back to another provider (data-fallback) or Auto mode routes to a model
+  // (data-orchestration route stage), reflect that in the composer's selected model.
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    let next: string | undefined;
+    for (const part of last.parts as Array<{ type: string; data?: { to?: string; stage?: string; model?: string } }>) {
+      if (part.type === "data-fallback" && part.data?.to) next = part.data.to;
+      if (part.type === "data-orchestration" && part.data?.stage === "route" && part.data?.model) next = part.data.model;
+    }
+    if (next) setModel((prev) => (prev === next ? prev : next));
+  }, [messages]);
+
   // Auto-scroll: use requestAnimationFrame during streaming for smooth continuous scroll
   const rafRef = useRef<number>(0);
   useEffect(() => {

@@ -22,10 +22,15 @@ off to the next mid-conversation.
   - `providers/` — 8-provider catalog + registry (model factory, fallback chain, per-provider
     cooldowns, mock model).
   - `agent/` — `loop.ts` (streaming turn), `turn.ts` (shared `pumpTurn` streaming+fallback
-    primitive), `compaction.ts` (auto-compaction), `scout.ts` (Model Crew), `pav.ts` (PAV
-    loop), `verify.ts` (runs repo test/typecheck scripts).
-  - `tools/` — bash/read/write/list/web_fetch with a per-mode policy + **Token Diet** +
-    permission gate.
+    primitive), `router.ts` (Auto-mode task classifier → model/preset), `compaction.ts`
+    (auto-compaction), `scout.ts` (Model Crew), `pav.ts` (PAV loop), `verify.ts` (runs repo
+    test/typecheck scripts).
+  - `tools/` — bash/read/write/list/web_fetch/web_search/lsp_diagnostics/send_email with a
+    per-mode policy + **Token Diet** + permission gate.
+  - `lsp/` — a minimal JSON-RPC **Language Server Protocol** client that starts any installed
+    language server (typescript-language-server, pyright, gopls, rust-analyzer, clangd, …) over
+    stdio, opens files, and collects diagnostics; drives the `lsp_diagnostics` tool and the PAV
+    loop's after-edit check. Fail-soft (no server → an install hint, never a crash).
   - `context/` (PERSONA.md + memory recall + skills), `mcp/` (stdio+HTTP client),
     `checkpoints/` (shadow-git rewind), `storage/` (JSON stores).
 - **`apps/server`** — one Hono server on `:3789`. Streaming `/api/chat` (injects context,
@@ -130,7 +135,16 @@ construction** because they operate on prompts/messages, not on any provider API
 - **What's the PAV loop?** → Plan → Apply → Verify: the brain drafts a plan (saved to
   `.personacode/plans/`), an edit pass applies it, then it runs **your repo's own typecheck /
   test scripts**; on failure it feeds the errors back and re-applies. Only package.json scripts
-  run — never model-suggested shell (safe).
+  run — never model-suggested shell (safe). Between Apply and the whole-repo verify it also runs
+  **LSP diagnostics** on just the edited files (fast, precise) and loops on any errors.
+- **How does LSP support work / does it need my editor?** → No editor needed. `packages/core/src/lsp/`
+  is a tiny **JSON-RPC LSP client**: it starts a language server you already have installed
+  (typescript-language-server, pyright, gopls, rust-analyzer, clangd, the vscode-langservers
+  set), opens the file, and reads back `publishDiagnostics` — the same protocol VS Code uses. The
+  agent calls it via the `lsp_diagnostics` tool, and the PAV loop runs it automatically after
+  edits. It's **fail-soft**: if no server is installed for a language it returns an "install X"
+  hint instead of erroring, and `PERSONACODE_LSP_<GROUP>` lets you point at a custom server. This
+  is language-agnostic by design — any LSP-conformant server works with zero code changes.
 - **Prompt caching?** → The stable system-prompt-first ordering is cache-friendly where
   providers support implicit caching (Anthropic / OpenAI / Gemini); a no-op elsewhere, never
   harmful.

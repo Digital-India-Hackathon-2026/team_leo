@@ -30,7 +30,23 @@ Hand this to Codex. It works **only** in `packages/core`, `packages/contracts`,
 
 ---
 
-## Remaining opportunities (we have time — ordered by value)
+## Shipped since this handoff (2026-07-11, all built + typecheck/build green)
+- ✅ **A. Auto-mode router (#5)** — `agent/router.ts`: heuristic + LLM classifier → `{kind, model, mode, preset}`, wired into `runAgentTurn` when `mode==="auto"`, emits a `route` orchestration stage. Fail-soft.
+- ✅ **B. `web_search` (#2)** — keyless `duck-duck-scrape` builtin, protocol-guarded, Token-Diet trimmed, mock sample; in `BUILTIN_TOOL_NAMES` + plan-mode policy.
+- ✅ **C. Deep Research starter** — `agents/starters.ts` `DEEP_RESEARCH_AGENT`, `seedStarterAgents()` on server boot.
+- ✅ **D. Bharat Mode (#30)** — `LanguageCode`/`LANGUAGE_LABELS` in contracts, `language` on ChatRequest/session (persisted), `responseDirectives()` injects a "respond in <language>" system directive.
+- ✅ **F. Terse Mode (#9)** — `terse` flag + `TERSE_SYSTEM_PROMPT` + directive, plumbed through server/session.
+- ✅ **G. Distribution (opencode-style)** — `apps/cli/scripts/build-package.mjs` esbuild-bundles CLI + server + `apps/web/dist` into one publishable `personacode` pkg (`bin: pcode/personacode`, runs compiled JS, no tsx/repo needed); `scripts/install.sh` does `npm i -g personacode`; `ensureServer` resolves the server from its installed path; `/api/health` returns `workspace`.
+- ✅ **LSP (Tier 3 stretch)** — `packages/core/src/lsp/` JSON-RPC client for any installed language server → `lsp_diagnostics` tool + auto-run in the PAV loop after edits. Verified end-to-end against pyright. Fail-soft; `PERSONACODE_LSP_<GROUP>` override.
+
+## Remaining opportunities (ordered by value)
+
+### E. ACP adapter (#29) 🟡 — editor integration (the main un-built item)
+Thin `apps/acp` using `@agentclientprotocol/sdk`: implement the agent side (`initialize`,
+`newSession`, `prompt` → forward to the core session API, stream `sessionUpdate`s). Makes
+Personacode usable inside Zed. ~Half a day. **This is now the highest-value remaining task.**
+
+### (below: original notes, kept for reference — A/B/C/D/F/G now DONE above)
 
 ### A. Auto-mode router (#5) 🔴 — plan feature, currently missing
 Auto mode exists as a *permission* mode but does NOT classify the task and pick a model.

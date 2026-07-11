@@ -19,6 +19,9 @@ import {
 import type { AgentDefinition, ChannelAdapter, ChannelMessage, Mode, TokenUsage } from "@personacode/contracts";
 import {
   ChannelSessionStore,
+  DeliveryStore,
+  deliver,
+  deliveryTargetHint,
   BUILTIN_TOOL_NAMES,
   SessionStore,
   NotesTasksStore,
@@ -28,6 +31,7 @@ import {
   compareModels,
   contextWindowFor,
   defaultModelRef,
+  deleteAgentDefinition,
   findAgentDefinition,
   getMcpManager,
   isMockMode,
@@ -40,6 +44,7 @@ import {
   runAgentTurn,
   runPavLoop,
   runSetupScout,
+  seedStarterAgents,
   resolveWorkspacePath,
 } from "@personacode/core";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
@@ -119,7 +124,7 @@ app.use(
   }),
 );
 
-app.get("/api/health", (c) => c.json({ ok: true, mock: isMockMode() }));
+app.get("/api/health", (c) => c.json({ ok: true, mock: isMockMode(), workspace: WS_ROOT }));
 app.get("/api/providers", (c) => c.json(listProviders()));
 app.get("/api/models", (c) => c.json(listModels()));
 
@@ -152,7 +157,9 @@ const WS_ROOT = findWorkspaceRoot();
 const store = new SessionStore(WS_ROOT);
 const dataStore = new NotesTasksStore(WS_ROOT);
 const channelSessions = new ChannelSessionStore(WS_ROOT);
+const deliveryStore = new DeliveryStore(WS_ROOT);
 const checkpoints = new CheckpointStore(WS_ROOT);
+await seedStarterAgents(WS_ROOT);
 const WS_IGNORE = new Set([
   "node_modules", ".git", "dist", "build", ".turbo", "coverage", ".personacode", ".pnpm",
   ".claude", ".playwright-mcp", ".understand-anything", ".vscode", ".idea",
@@ -241,12 +248,40 @@ app.post("/api/agents", async (c) => {
   const parsed = CreateAgentRequestSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "invalid agent prompt" }, 400);
   try {
-    const result = await buildAgentDefinition({ cwd: WS_ROOT, prompt: parsed.data.prompt, modelRef: parsed.data.model });
+    const creds = parsed.data.delivery;
+    // Non-secret marker recorded on the agent; the secret creds go to the secrets store.
+    const deliveryMarker = creds ? { channel: creds.channel, target: deliveryTargetHint(creds) } : undefined;
+    const result = await buildAgentDefinition({
+      cwd: WS_ROOT,
+      prompt: parsed.data.prompt,
+      modelRef: parsed.data.model,
+      delivery: deliveryMarker,
+    });
+    if (creds) deliveryStore.set(result.agent.name, creds);
     await registerScheduledAgent(result.agent);
     return c.json(result, 201);
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : String(error) }, 502);
   }
+});
+app.delete("/api/agents/:name", async (c) => {
+  const name = decodeURIComponent(c.req.param("name") ?? "");
+  const removed = await deleteAgentDefinition(WS_ROOT, name);
+  if (!removed) return c.json({ error: "agent not found" }, 404);
+  // Stop its cron job if it had a schedule + forget its delivery credentials.
+  const key = removed.agent.name.toLowerCase();
+  scheduledJobs.get(key)?.stop();
+  scheduledJobs.delete(key);
+  deliveryStore.delete(removed.agent.name);
+  return c.json({ ok: true, agent: removed.agent, path: removed.path });
+});
+// Send a test delivery for an agent (verifies its stored credentials without a full run).
+app.post("/api/agents/:name/test-delivery", async (c) => {
+  const name = decodeURIComponent(c.req.param("name") ?? "");
+  const config = deliveryStore.get(name);
+  if (!config) return c.json({ error: "no delivery configured for this agent" }, 404);
+  const result = await deliver(config, `✅ Personacode test delivery from "${name}". Your ${config.channel} delivery is working.`);
+  return result.ok ? c.json({ ok: true }) : c.json({ error: result.error }, 502);
 });
 
 // ---- notes + tasks (workspace-local persistent JSON) ----
@@ -311,6 +346,8 @@ app.post("/api/sessions", async (c) => {
     title: body.title,
     model: body.model ?? defaultModelRef(),
     mode: body.mode,
+    language: body.language,
+    terse: body.terse,
   });
   const { messages: _m, ...meta } = session;
   return c.json(meta);
@@ -343,6 +380,14 @@ app.post("/api/chat", async (c) => {
   if (body.agent && !agentDefinition) return c.json({ error: "agent not found" }, 404);
   const modelRef = body.model ?? agentDefinition?.model ?? session?.model ?? defaultModelRef();
   const mode = body.mode ?? agentDefinition?.mode ?? session?.mode ?? "default";
+  const language = body.language === null ? undefined : body.language ?? session?.language;
+  const terse = body.terse ?? session?.terse ?? false;
+  if (session && (body.language !== undefined || body.terse !== undefined)) {
+    if (body.language === null) delete session.language;
+    else if (body.language !== undefined) session.language = body.language;
+    if (body.terse !== undefined) session.terse = body.terse;
+    store.save(session);
+  }
   const disabledTools = new Set(body.disabledTools ?? []);
   if (agentDefinition?.tools.length) {
     for (const name of BUILTIN_TOOL_NAMES) if (!agentDefinition.tools.includes(name)) disabledTools.add(name);
@@ -404,6 +449,8 @@ app.post("/api/chat", async (c) => {
         extraTools,
         disabledTools: [...disabledTools],
         system: turnSystem,
+        language,
+        terse,
         onFallback,
         onFinishTurn,
       })
@@ -415,6 +462,8 @@ app.post("/api/chat", async (c) => {
         extraTools,
         disabledTools: [...disabledTools],
         orchestrate: body.orchestrate,
+        language,
+        terse,
         // Enable the y/n/always approval gate only when the client can answer prompts.
         approval: body.approvals ? { waitForDecision: (id) => waitForDecision(id) } : undefined,
         system: turnSystem,
@@ -467,8 +516,13 @@ app.get("/s/:id", (c) => {
 });
 
 // ---- static web app (built by apps/web → served here in prod) ----
-const webDist = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "dist");
-if (existsSync(webDist)) {
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const webDist = [
+  process.env.PERSONACODE_WEB_DIST,
+  join(moduleDir, "web"),
+  join(moduleDir, "..", "..", "web", "dist"),
+].find((candidate): candidate is string => Boolean(candidate && existsSync(join(candidate, "index.html"))));
+if (webDist) {
   app.use("/*", serveStatic({ root: webDist }));
   app.get("*", (c) => c.html(readFileSync(join(webDist, "index.html"), "utf8")));
 }
@@ -651,6 +705,7 @@ async function runScheduledAgent(agent: AgentDefinition): Promise<void> {
   const disabledTools = agent.tools.length
     ? BUILTIN_TOOL_NAMES.filter((name) => !agent.tools.includes(name))
     : undefined;
+  let reply = "";
   const stream = runAgentTurn({
     messages,
     modelRef: agent.model ?? session.model,
@@ -659,6 +714,7 @@ async function runScheduledAgent(agent: AgentDefinition): Promise<void> {
     disabledTools,
     system: await systemForAgent(context.system, agent),
     onFinishTurn: ({ text, usage, modelRef }) => {
+      reply = text;
       session.messages = [...messages, { id: crypto.randomUUID(), role: "assistant", parts: [{ type: "text", text }] }];
       session.model = modelRef;
       store.save(session);
@@ -668,6 +724,18 @@ async function runScheduledAgent(agent: AgentDefinition): Promise<void> {
   const reader = stream.getReader();
   while (!(await reader.read()).done) {
     // Consume the stream to drive the scheduled turn to completion.
+  }
+
+  // Push the result to the agent's configured delivery target (Discord/Telegram/email),
+  // using that agent's own stored credentials. This is what makes "email me the AI news
+  // every morning" or "post it to my Discord" actually arrive somewhere.
+  if (agent.delivery && reply.trim()) {
+    const config = deliveryStore.get(agent.name);
+    if (config) {
+      const result = await deliver(config, reply);
+      if (result.ok) console.log(`[schedule:${agent.name}] delivered to ${agent.delivery.channel}`);
+      else console.warn(`[schedule:${agent.name}] delivery failed: ${redactText(result.error ?? "unknown")}`);
+    }
   }
 }
 
@@ -694,4 +762,3 @@ async function registerScheduledAgent(agent: AgentDefinition): Promise<void> {
   scheduledJobs.set(key, job);
   console.log(`[schedule] ${agent.name} registered (${agent.schedule})`);
 }
-

@@ -80,16 +80,39 @@ export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 export const ModeSchema = z.enum(["default", "plan", "auto", "edit"]);
 export type Mode = z.infer<typeof ModeSchema>;
 
+export const LanguageCodeSchema = z.enum([
+  "hi", "bn", "ta", "te", "mr", "kn", "gu", "ml", "pa", "or", "as", "ur",
+]);
+export type LanguageCode = z.infer<typeof LanguageCodeSchema>;
+export const LANGUAGE_LABELS: Record<LanguageCode, string> = {
+  hi: "Hindi",
+  bn: "Bengali",
+  ta: "Tamil",
+  te: "Telugu",
+  mr: "Marathi",
+  kn: "Kannada",
+  gu: "Gujarati",
+  ml: "Malayalam",
+  pa: "Punjabi",
+  or: "Odia",
+  as: "Assamese",
+  ur: "Urdu",
+};
+
 // ---------- Model Crew (multi-model orchestration) ----------
 export const ModelRoleSchema = z.enum(["scout", "summarizer", "brain", "reviewer", "router"]);
 export type ModelRole = z.infer<typeof ModelRoleSchema>;
+export const AutoTaskKindSchema = z.enum(["code", "chat", "research", "long-context"]);
+export type AutoTaskKind = z.infer<typeof AutoTaskKindSchema>;
 
 /** One step of the scout pipeline, streamed to clients as a `data-orchestration` chunk. */
 export const OrchestrationStageSchema = z.object({
-  stage: z.enum(["scout", "brief", "review"]),
+  stage: z.enum(["route", "scout", "brief", "review"]),
   model: z.string(),
   ms: z.number(),
   detail: z.string(),
+  kind: AutoTaskKindSchema.optional(),
+  mode: ModeSchema.optional(),
 });
 export type OrchestrationStage = z.infer<typeof OrchestrationStageSchema>;
 
@@ -149,6 +172,8 @@ export const SessionMetaSchema = z.object({
   updatedAt: z.number(),
   model: z.string(), // ModelInfo.ref
   mode: ModeSchema,
+  language: LanguageCodeSchema.optional(),
+  terse: z.boolean().optional(),
   usage: TokenUsageSchema,
 });
 export type SessionMeta = z.infer<typeof SessionMetaSchema>;
@@ -166,6 +191,8 @@ export const CreateSessionRequestSchema = z.object({
   title: z.string().optional(),
   model: z.string().optional(),
   mode: ModeSchema.optional(),
+  language: LanguageCodeSchema.optional(),
+  terse: z.boolean().optional(),
 });
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 
@@ -176,6 +203,10 @@ export const ChatRequestSchema = z.object({
   /** Saved agent definition name from `.personacode/agents/`. */
   agent: z.string().trim().min(1).max(100).optional(),
   mode: ModeSchema.optional(),
+  /** Bharat Mode response language. null clears a saved session preference. */
+  language: LanguageCodeSchema.nullable().optional(),
+  /** Terse Mode: minimal-token user-facing responses without reducing tool quality. */
+  terse: z.boolean().optional(),
   /** Qualified tool names toggled off for this turn (builtins or MCP mcp__server__tool). */
   disabledTools: z.array(z.string()).optional(),
   /** Model Crew: run the multi-model scout→brief pipeline before the brain turn. */
@@ -356,6 +387,53 @@ export type HookConfig = z.infer<typeof HookConfigSchema>;
 
 // ---------- Agent definitions (superagents) ----------
 
+/** Channels an agent can actively *push* a message to (send, not just answer). */
+export const DeliveryChannelSchema = z.enum(["discord", "telegram", "email"]);
+export type DeliveryChannel = z.infer<typeof DeliveryChannelSchema>;
+
+/**
+ * Non-secret delivery marker stored *in* the agent definition — safe to return to
+ * clients. It records that the agent delivers, on which channel, and a non-secret
+ * display target (an email address, a masked "#channel" hint). Credentials live
+ * separately (DeliveryCredentials), server-side only, and are never returned.
+ */
+export const AgentDeliverySchema = z.object({
+  channel: DeliveryChannelSchema,
+  /** human-readable, non-secret target hint for the UI (e.g. an email or "#ai-news"). */
+  target: z.string().max(200).optional(),
+});
+export type AgentDelivery = z.infer<typeof AgentDeliverySchema>;
+
+/**
+ * Per-agent delivery credentials, supplied at creation. Stored server-side only in the
+ * git-ignored secrets store — NEVER logged and NEVER returned by any API. Each agent
+ * carries its own creds, so one deployment can drive many bots / mailboxes.
+ */
+export const DeliveryCredentialsSchema = z
+  .object({
+    channel: DeliveryChannelSchema,
+    // discord: a channel webhook URL (no bot infra needed)
+    webhookUrl: z.string().url().max(500).optional(),
+    // telegram: bot token + destination chat id
+    botToken: z.string().trim().min(1).max(200).optional(),
+    chatId: z.string().trim().min(1).max(100).optional(),
+    // email: recipient (+ optional per-agent SMTP; else the global EMAIL_* env creds)
+    to: z.string().email().optional(),
+    smtpUser: z.string().trim().max(200).optional(),
+    smtpPass: z.string().max(500).optional(),
+    smtpHost: z.string().trim().max(200).optional(),
+  })
+  .refine(
+    (d) =>
+      d.channel === "discord"
+        ? Boolean(d.webhookUrl)
+        : d.channel === "telegram"
+          ? Boolean(d.botToken && d.chatId)
+          : Boolean(d.to),
+    { message: "missing required credentials for the chosen delivery channel" },
+  );
+export type DeliveryCredentials = z.infer<typeof DeliveryCredentialsSchema>;
+
 export const AgentDefinitionSchema = z.object({
   name: z.string().trim().min(1).max(100),
   description: z.string(),
@@ -368,12 +446,16 @@ export const AgentDefinitionSchema = z.object({
   /** cron expression for scheduled runs */
   schedule: z.string().optional(),
   mode: ModeSchema.default("default"),
+  /** where a scheduled/triggered run pushes its output (creds stored separately). */
+  delivery: AgentDeliverySchema.optional(),
 });
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
 
 export const CreateAgentRequestSchema = z.object({
   prompt: z.string().trim().min(1).max(10_000),
   model: z.string().trim().min(1).optional(),
+  /** optional per-agent delivery credentials, stored server-side only. */
+  delivery: DeliveryCredentialsSchema.optional(),
 });
 export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
 

@@ -37,6 +37,8 @@ function triggeredTool(prompt: LanguageModelV3CallOptions["prompt"]): { name: st
   const text = lastUserText(prompt).toLowerCase();
   if (/\bwrite\b.*\bfile\b|create a file/.test(text))
     return { name: "write_file", input: { path: "mock-note.txt", content: "written by the mock tool" } };
+  if (/\b(search|research|latest|current)\b/.test(text))
+    return { name: "web_search", input: { query: lastUserText(prompt), maxResults: 3 } };
   if (/\b(run|exec|execute)\b.*\b(bash|command|shell)\b|run bash|list files/.test(text))
     return { name: "bash", input: { command: 'echo "hello from the mock tool"' } };
   return null;

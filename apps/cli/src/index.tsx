@@ -116,10 +116,13 @@ if (wantStop) {
 
 /** Open a URL in the user's default browser (best-effort, cross-platform). */
 function openBrowser(url: string): void {
+  if (process.env.PERSONACODE_NO_BROWSER === "1") return;
+  if (process.platform === "win32") {
+    spawnSync("cmd", ["/c", "start", "", url], { stdio: "ignore", windowsHide: true });
+    return;
+  }
   const [cmd, cmdArgs]: [string, string[]] =
-    process.platform === "win32"
-      ? ["cmd", ["/c", "start", "", url]]
-      : process.platform === "darwin"
+    process.platform === "darwin"
         ? ["open", [url]]
         : ["xdg-open", [url]];
   try {
@@ -174,14 +177,9 @@ if (wantWeb) {
   }
 
   if (lans.length) console.log(`  If a teammate can't connect, allow port ${port} through your firewall.`);
-  console.log("  Server started by this command — press Ctrl+C to stop it (or run `pcode --stop`).");
-  const stop = () => {
-    srv.child?.kill();
-    process.exit(0);
-  };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  await new Promise<never>(() => {}); // keep the spawned server running until Ctrl+C
+  console.log("  Server is running in the background — run `pcode --stop` to stop it.");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  process.exit(0);
 }
 
 // Run in the terminal's alternate screen buffer (like opencode / vim / less):
@@ -202,7 +200,6 @@ const { waitUntilExit } = render(<App base={srv.base} mock={srv.mock} />);
 
 function shutdown() {
   restoreScreen();
-  if (srv.started) srv.child?.kill(); // only kill a server we spawned
 }
 
 // Safety nets so the main screen is always restored, however we leave.

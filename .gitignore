@@ -9,6 +9,8 @@ build/
 **/.personacode/data/
 **/.personacode/checkpoints/
 **/.personacode/plans/
+# Per-agent delivery credentials (bot tokens / webhooks) — NEVER commit
+**/.personacode/secrets.json
 *.log
 .DS_Store
 Thumbs.db
@@ -20,3 +22,7 @@ docs/API.md
 .claude/settings.local.json
 .playwright-mcp/
 .understand-anything/
+.personacode/
+
+# Local-only demo/presentation script (not shared)
+docs/demo-script.md

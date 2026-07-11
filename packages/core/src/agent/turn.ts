@@ -1,12 +1,31 @@
 import { stepCountIs, streamText } from "ai";
 import type { ModelMessage, ToolSet, UIMessage, UIMessageChunk } from "ai";
-import type { Mode, TokenUsage } from "@personacode/contracts";
+import { LANGUAGE_LABELS, type LanguageCode, type Mode, type TokenUsage } from "@personacode/contracts";
 import type { ProviderId } from "@personacode/contracts";
 import { fallbackChain, getModel, setCooldown } from "../providers/registry.js";
 
 export const SYSTEM_PROMPT = `You are Personacode, a capable, privacy-first coding and general agent running locally on the user's machine.
 Be direct and helpful. Use tools when they get you facts; don't guess at file contents or command output.
 When you finish multi-step work, summarize what you did in one short paragraph.`;
+
+export const TERSE_SYSTEM_PROMPT = `You are Personacode, a privacy-first local agent. Use tools for facts. Be correct, direct, and extremely concise.`;
+
+export function responseDirectives(language?: LanguageCode, terse = false): string {
+  const directives: string[] = [];
+  if (language) {
+    directives.push(
+      `BHARAT MODE: Respond, explain, plan, and write user-facing prose in ${LANGUAGE_LABELS[language]}. ` +
+      `Preserve code identifiers, commands, paths, API names, citations, and quoted source text exactly. ` +
+      `Continue honoring PERSONA.md, recalled memory, skills, and selected-agent instructions.`,
+    );
+  }
+  if (terse) {
+    directives.push(
+      "TERSE MODE: Give the shortest complete answer that preserves correctness. Avoid filler, request restatement, repeated conclusions, and unnecessary headings. Do not omit required citations, warnings, verification results, or deliverables.",
+    );
+  }
+  return directives.length ? `\n\n${directives.join("\n")}` : "";
+}
 
 export const MODE_HINTS: Record<Mode, string> = {
   default: "",
@@ -23,10 +42,13 @@ export interface AgentTurnResult {
 
 /**
  * Should this provider error trigger a fallback to the next provider?
- * Covers three families of "this provider can't serve the request" failures:
+ * Covers the families of "this provider can't serve the request" failures:
  *  - rate/quota limits (429, quota, overloaded, insufficient)
- *  - transient upstream outages (503, 500, overloaded)
+ *  - transient upstream outages (500/502/503/504, overloaded, service unavailable)
  *  - auth / key problems (401/403, invalid or killed API key, permission denied)
+ *  - stale model ids (404 / "model not found" / "does not exist" — provider catalogs
+ *    rotate model ids monthly, so a retired id on one provider should hand off, not die)
+ *  - network / transport failures (fetch failed, timeouts, DNS, connection resets)
  * A killed/invalid key surfaces as "API key not valid" (400) or 403 — the plan's
  * "kill the key to demo fallback" only works if those hand off instead of hard-failing.
  */
@@ -37,8 +59,13 @@ export function shouldFallback(msg: string): boolean {
     m.includes("rate limit") ||
     m.includes("quota") ||
     m.includes("overloaded") ||
-    m.includes("503") ||
     m.includes("500") ||
+    m.includes("502") ||
+    m.includes("503") ||
+    m.includes("504") ||
+    m.includes("service unavailable") ||
+    m.includes("bad gateway") ||
+    m.includes("gateway timeout") ||
     m.includes("insufficient") ||
     m.includes("401") ||
     m.includes("403") ||
@@ -47,7 +74,27 @@ export function shouldFallback(msg: string): boolean {
     m.includes("permission denied") ||
     m.includes("api key not valid") ||
     m.includes("invalid api key") ||
-    m.includes("api_key_invalid")
+    m.includes("api_key_invalid") ||
+    // stale / unknown model id — try the next provider's model instead of dying
+    m.includes("404") ||
+    m.includes("not found") ||
+    m.includes("does not exist") ||
+    m.includes("model_not_found") ||
+    m.includes("no endpoints") ||
+    m.includes("decommission") ||
+    m.includes("deprecated") ||
+    // network / transport
+    m.includes("fetch failed") ||
+    m.includes("network") ||
+    m.includes("timed out") ||
+    m.includes("timeout") ||
+    m.includes("etimedout") ||
+    m.includes("econnreset") ||
+    m.includes("econnrefused") ||
+    m.includes("enotfound") ||
+    m.includes("eai_again") ||
+    m.includes("socket hang up") ||
+    m.includes("terminated")
   );
 }
 

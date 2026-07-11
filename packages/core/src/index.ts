@@ -19,6 +19,8 @@ export {
 } from "./agent/loop.js";
 export { SessionStore } from "./storage/sessions.js";
 export { NotesTasksStore, ChannelSessionStore } from "./storage/data.js";
+export { DeliveryStore } from "./storage/secrets.js";
+export { deliver, deliveryTargetHint, type DeliveryConfig, type DeliveryResult } from "./delivery/index.js";
 export { loadHooks, hooksPath, runToolHooks, runFinishHooks, type LoadedHooks } from "./hooks/index.js";
 export {
   buildProjectContext,
@@ -73,14 +75,19 @@ export {
   type ReviewBaseline,
   type ReviewResult,
 } from "./agent/reviewer.js";
+export { routeAutoTask, type AutoRouteResult } from "./agent/router.js";
 export {
   buildAgentDefinition,
   saveAgentDefinition,
   listAgentDefinitions,
   findAgentDefinition,
+  deleteAgentDefinition,
+  seedStarterAgents,
   agentsDir,
 } from "./agents/index.js";
+export { DEEP_RESEARCH_AGENT } from "./agents/starters.js";
 export { runSetupScout } from "./setup/index.js";
+export { getDiagnostics, formatDiagnostics, resolveServer, onPath, type LspReport, type LspDiagnostic } from "./lsp/index.js";
 export { resolveWorkspacePath } from "./security/paths.js";
 export {
   modelForRole,
