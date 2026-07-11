@@ -68,6 +68,24 @@ Personacode usable inside Zed. ~Half a day.
 A toggle/flag that swaps in a compact system prompt + an "answer concisely" instruction. Today
 only the minimal base prompt + terse sub-agent prompts exist (no reply-compression toggle).
 
+### G. Distribution — opencode-style install 🔴 (product-critical, not yet built)
+Personacode must install like opencode: `curl -fsSL <url> | bash` **or** `npm i -g personacode`,
+then `pcode` runs from anywhere — **no repo checkout**. Today `ensureServer` spawns the server
+from `apps/server/src` via tsx (repo-only); it now falls back to `dist/index.js`, but a real
+global install needs packaging:
+- **One publishable `personacode` package** bundling the CLI + server + built `apps/web/dist`,
+  with `bin: { pcode, personacode }`. Options: bundle server into the CLI (esbuild) so there's a
+  single `dist` with no workspace-path assumptions, OR publish the workspace packages together and
+  have the CLI resolve `@personacode/server` from `node_modules`.
+- **`ensureServer` must locate the server relative to its own installed path** (not `pnpm-workspace.yaml`),
+  and run compiled JS (no `tsx` runtime dep).
+- **`curl | bash` install script** (`scripts/install.sh`): detect Node, `npm i -g personacode`
+  (or download a prebuilt binary via `bun build --compile`/`pkg`). Host the script free (GitHub raw / Pages).
+- Runtime/user state already lives in the per-user `~/.personacode/run/` dir (PID file) — keep any
+  new runtime state there, never in the repo.
+- **Acceptance:** on a machine with only Node + the published package (no repo), `pcode` and
+  `pcode --web` start the server and work; `pcode --stop` stops it.
+
 ## Also
 - Web UI for the new backends (Superagent builder, Setup Scout, Cookbook hardware, PAV card) is
   **Dev B's task** — see `docs/handoff/dev-b-web-tasks.md`. Don't touch `apps/web`.
