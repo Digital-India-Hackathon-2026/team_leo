@@ -12,17 +12,19 @@ import type { ChannelAdapter } from "@personacode/contracts";
 import { telegramAdapter } from "./telegram.js";
 import { discordAdapter } from "./discord.js";
 import { emailAdapter } from "./email.js";
+import { slackAdapter } from "./slack.js";
 import { stubAdapter } from "./stub.js";
 
 export const allAdapters: ChannelAdapter[] = [
   telegramAdapter,
   discordAdapter,
   emailAdapter,
-  stubAdapter("slack"),
+  slackAdapter,
   stubAdapter("whatsapp"),
   stubAdapter("sms"),
   stubAdapter("googlechat"),
   stubAdapter("teams"),
 ];
 
-export { telegramAdapter, discordAdapter, emailAdapter, stubAdapter };
+export { telegramAdapter, discordAdapter, emailAdapter, slackAdapter, stubAdapter };
+export { getCookbookRecommendations, detectHardware, type CookbookResult, type HardwareInfo, type ModelRecommendation } from "./cookbook.js";
