@@ -1,10 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defaultBase, getHealth } from "./api.js";
 
 /** Walk up from `start` to find the monorepo root (has pnpm-workspace.yaml). */
-function findRepoRoot(start: string): string | null {
+export function findRepoRoot(start: string): string | null {
   let dir = start;
   for (let i = 0; i < 8; i++) {
     if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
@@ -28,27 +29,56 @@ export interface ServerHandle {
  * root and poll /api/health. Fail-soft: returns started:false if we can't spawn,
  * so the caller can tell the user to run `pnpm dev` manually.
  */
-export async function ensureServer(): Promise<ServerHandle & { error?: string }> {
+export async function ensureServer(opts: { host?: string } = {}): Promise<ServerHandle & { error?: string }> {
   const base = defaultBase();
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const installedEntry = join(moduleDir, "runtime", "server.js");
+  const root = findRepoRoot(process.cwd()) ?? findRepoRoot(moduleDir);
+  const installed = existsSync(installedEntry);
+  const workspace = process.env.PERSONACODE_WORKSPACE ?? (installed ? process.cwd() : root ?? process.cwd());
   const existing = await getHealth(base);
-  if (existing) return { base, mock: existing.mock, started: false };
+  if (existing) {
+    if (existing.workspace && existing.workspace !== workspace) {
+      return {
+        base,
+        mock: existing.mock,
+        started: false,
+        error: `server on ${base} is attached to ${existing.workspace}; run pcode --stop before opening ${workspace}`,
+      };
+    }
+    return { base, mock: existing.mock, started: false };
+  }
 
-  const root = findRepoRoot(process.cwd()) ?? findRepoRoot(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")));
-  const entry = root ? join(root, "apps", "server", "src", "index.ts") : null;
-  if (!root || !entry || !existsSync(entry)) {
-    return { base, mock: false, started: false, error: "server not running and repo root not found" };
+  const srcEntry = root ? join(root, "apps", "server", "src", "index.ts") : null;
+  const distEntry = root ? join(root, "apps", "server", "dist", "index.js") : null;
+  // Dev (repo checkout): run the source via tsx so it's always current. Installed /
+  // built: run the compiled dist (no tsx runtime dependency needed).
+  const spawnArgs =
+    installed
+      ? [installedEntry]
+      : srcEntry && existsSync(srcEntry)
+      ? ["--import", "tsx", srcEntry]
+      : distEntry && existsSync(distEntry)
+        ? [distEntry]
+        : null;
+  if (!spawnArgs) {
+    return { base, mock: false, started: false, error: "server not running and could not locate the server to start" };
   }
 
   let child: ChildProcess;
   try {
-    child = spawn(process.execPath, ["--import", "tsx", entry], {
-      cwd: root,
+    child = spawn(process.execPath, spawnArgs, {
+      cwd: installed ? process.cwd() : root!,
       env: {
         ...process.env,
-        PERSONACODE_WORKSPACE: process.env.PERSONACODE_WORKSPACE ?? root,
+        PERSONACODE_WORKSPACE: workspace,
+        ...(installed ? { PERSONACODE_WEB_DIST: join(moduleDir, "runtime", "web") } : {}),
+        // `pcode --web` passes host "0.0.0.0" so other devices on the LAN can reach it.
+        ...(opts.host ? { PERSONACODE_HOST: opts.host } : {}),
       },
       stdio: "ignore",
       windowsHide: true,
+      detached: true,
     });
     child.unref();
   } catch (err) {

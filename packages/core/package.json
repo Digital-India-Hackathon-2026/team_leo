@@ -23,6 +23,7 @@
     "@personacode/contracts": "workspace:*",
     "@types/nodemailer": "^8.0.1",
     "ai": "^7.0.18",
+    "duck-duck-scrape": "^2.2.7",
     "node-cron": "^4.2.1",
     "nodemailer": "^9.0.3",
     "zod": "^4.4.3"

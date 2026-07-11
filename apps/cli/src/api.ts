@@ -1,5 +1,5 @@
 import type { UIMessage } from "ai";
-import type { AgentDefinition, Mode, SetupScoutResponse } from "@personacode/contracts";
+import type { AgentDefinition, LanguageCode, ModelInfo, Mode, SetupScoutResponse } from "@personacode/contracts";
 
 /**
  * Thin client for the Personacode server. The CLI routes chat through the server
@@ -13,6 +13,7 @@ export function defaultBase(): string {
 export interface Health {
   ok: boolean;
   mock: boolean;
+  workspace?: string;
 }
 
 export async function getHealth(base = defaultBase()): Promise<Health | null> {
@@ -26,7 +27,7 @@ export async function getHealth(base = defaultBase()): Promise<Health | null> {
 
 export async function createSession(
   base: string,
-  opts: { model?: string; mode?: Mode; title?: string }
+  opts: { model?: string; mode?: Mode; title?: string; language?: LanguageCode; terse?: boolean }
 ): Promise<string> {
   const res = await fetch(`${base}/api/sessions`, {
     method: "POST",
@@ -79,6 +80,8 @@ export async function streamChat(
     model?: string;
     agent?: string;
     mode?: Mode;
+    language?: LanguageCode | null;
+    terse?: boolean;
     disabledTools?: string[];
     orchestrate?: boolean;
     pav?: boolean;
@@ -239,6 +242,26 @@ export async function createAgent(
   const body = (await res.json()) as { agent?: AgentDefinition; path?: string; error?: string };
   if (!res.ok || !body.agent || !body.path) throw new Error(body.error ?? `server responded ${res.status}`);
   return { agent: body.agent, path: body.path };
+}
+
+export async function getAgents(base: string): Promise<Array<{ agent: AgentDefinition; path: string }>> {
+  const res = await fetch(`${base}/api/agents`);
+  if (!res.ok) throw new Error(`server responded ${res.status}`);
+  return (await res.json()) as Array<{ agent: AgentDefinition; path: string }>;
+}
+
+export async function deleteAgent(base: string, name: string): Promise<void> {
+  const res = await fetch(`${base}/api/agents/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `server responded ${res.status}`);
+  }
+}
+
+export async function getModels(base = defaultBase()): Promise<ModelInfo[]> {
+  const res = await fetch(`${base}/api/models`);
+  if (!res.ok) throw new Error(`server responded ${res.status}`);
+  return (await res.json()) as ModelInfo[];
 }
 
 export async function runSetupScout(base: string, apply: boolean): Promise<SetupScoutResponse> {
